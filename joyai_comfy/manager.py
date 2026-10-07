@@ -406,27 +406,51 @@ class Manager:
 
         threading.Thread(target=watch, name="joyai-release", daemon=True).start()
 
-    def _wait_release(self, interrupted: Callable[[], bool], notify: Callable[[str], None] | None) -> None:
-        if self._release_done.is_set():
-            return
+    def _wait_release(self, rt: Runtime, interrupted: Callable[[], bool], notify: Callable[[str], None] | None) -> None:
+        """Before a model load: if a worker stopped recently, wait (interruptible, inside the release window of
+        release_timeout_s after the stop) until its memory is released AND the load would pass admission. The VM can
+        still hold a few GiB after the release criterion is met, so both are checked."""
         rel = self.release
-        msg = (
-            f"Waiting for WSL memory release (commit back to <= {rel['baseline_gib'] + rel['tolerance_gib']:.1f} GiB expected; up to "
-            f"{rel['timeout_s']:.0f} s after the previous worker stopped)"
-        )
-        self._note("waiting_for_release")
-        if notify:
-            notify(msg)
-        while not self._release_done.wait(0.5):
-            if interrupted():
-                raise JobCancelled("cancelled while waiting for the WSL memory release")
-        if not rel.get("released"):
-            raise ReleaseTimeout(
-                f"WSL memory was not released within {rel['timeout_s']:.0f} s after the previous worker stopped (commit "
-                f"{rel.get('commit_gib')} GiB); a new model load was not started. Retry in a minute, or check what else holds memory."
+        if not rel or not rel.get("started"):
+            return
+        guard = rt.memory_guard
+        deadline = rel["started"] + rel.get("timeout_s", guard["release_timeout_s"])
+        told = False
+
+        def tell(text: str) -> None:
+            nonlocal told
+            if not told:
+                self._note("waiting_for_release")
+                told = True
+            if notify:
+                notify(text)
+
+        if not self._release_done.is_set():
+            tell(
+                f"Waiting for WSL memory release (commit back to <= {rel['baseline_gib'] + rel['tolerance_gib']:.1f} GiB expected; up to "
+                f"{rel['timeout_s']:.0f} s after the previous worker stopped)"
             )
-        if notify:
-            notify(f"WSL memory released after {rel.get('seconds')} s")
+            while not self._release_done.wait(0.5):
+                if interrupted():
+                    raise JobCancelled("cancelled while waiting for the WSL memory release")
+            if not rel.get("released"):
+                raise ReleaseTimeout(
+                    f"WSL memory was not released within {rel['timeout_s']:.0f} s after the previous worker stopped (commit "
+                    f"{rel.get('commit_gib')} GiB); a new model load was not started. Retry in a minute, or check what else holds memory."
+                )
+        # released; within the window, also wait until a load would be admitted (the VM may still be shrinking)
+        while time.time() < deadline:
+            ok, why = memory.check_admission(memory.snapshot(), guard, guard["expected_worker_gib"], start=True)
+            if ok:
+                if told and notify:
+                    notify(f"WSL memory released after {round(time.time() - rel['started'], 1)} s")
+                return
+            tell(f"Waiting for WSL memory release: {why}")
+            end = time.monotonic() + 2.0
+            while time.monotonic() < end:
+                if interrupted():
+                    raise JobCancelled("cancelled while waiting for the WSL memory release")
+                time.sleep(0.25)
 
     def _cancel_idle(self) -> None:
         if self._idle_timer is not None:
@@ -507,7 +531,7 @@ class Manager:
             if not distro_installed(rt):
                 self.last_error = f"WSL distro {rt.distro!r} is not installed (see `wsl.exe -l -v`)"
                 raise WorkerError(f"{self.last_error}; check the runtime {rt.id!r} in the JoyAI runtime config")
-            self._wait_release(interrupted, notify)  # never start a model load on residual commit of the previous worker
+            self._wait_release(rt, interrupted, notify)  # never start a model load on residual commit of the previous worker
             self._clean_stale(rt)
             snap = memory.snapshot()
             ok, why = memory.check_admission(snap, rt.memory_guard, rt.memory_guard["expected_worker_gib"], start=True)

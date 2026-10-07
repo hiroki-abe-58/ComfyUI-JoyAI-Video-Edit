@@ -335,3 +335,20 @@ def test_quick_release_goes_straight_to_stopped(manager, make_rt, monkeypatch):
     manager.load(rt)
     manager.unload()
     assert manager.state == M.STOPPED and manager.release["released"] is True
+
+
+def test_load_waits_for_admission_after_release(manager, make_rt, monkeypatch):
+    """Released (back within tolerance of the pre-load level) but still above the admission cap: keep waiting
+    inside the release window, then load once admission passes."""
+    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    state = {"commit": 22.0}
+    monkeypatch.setattr(memory, "snapshot", snap_of(state))
+    manager.load(rt)
+    state["commit"] = 25.5  # within 22 + 4 (released) but 25.5 + 65 = 90.5 > 90 GiB cap
+    manager.unload()
+    assert manager.state == M.STOPPED and manager.release["released"] is True
+    threading.Timer(2.5, lambda: state.update(commit=24.0)).start()
+    notes = []
+    t0 = time.time()
+    assert manager.load(rt, notify=notes.append)["state"] == M.READY
+    assert time.time() - t0 >= 2.0 and any("needs 65.0 GiB" in n for n in notes)
