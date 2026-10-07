@@ -60,8 +60,30 @@ def _snap_to_align(value: int, align: int) -> int:  # the upstream server's rule
     return max(align, (value + align // 2) // align * align)
 
 
+def check_checkpoints(cfg: dict) -> None:
+    """Refuse before any import or GPU work when a checkpoint is missing (nothing is ever downloaded)."""
+    need = {
+        "dit_ckpt": (cfg["dit_ckpt"], os.path.isfile),
+        "vae_ckpt": (cfg["vae_ckpt"], os.path.exists),
+        "text_encoder_ckpt": (os.path.join(cfg["text_encoder_ckpt"], "config.json"), os.path.isfile),
+        "text_encoder_ckpt index": (os.path.join(cfg["text_encoder_ckpt"], "model.safetensors.index.json"), os.path.isfile),
+    }
+    missing = [
+        f"{key} ({os.path.basename(os.path.dirname(p)) if key.startswith('text_encoder') else os.path.basename(p)})"
+        for key, (p, ok) in need.items()
+        if not ok(p)
+    ]
+    if missing:
+        raise EngineError(
+            "checkpoint missing in the runtime: "
+            + ", ".join(missing)
+            + " - install the weights as described in docs/SETUP.md; nothing is downloaded at run time"
+        )
+
+
 class Engine:
     def __init__(self, cfg: dict):
+        check_checkpoints(cfg)
         self.cfg = cfg
         cache = cfg["cache_dir"].rstrip("/")
         os.environ.update(PROFILE_ENV)

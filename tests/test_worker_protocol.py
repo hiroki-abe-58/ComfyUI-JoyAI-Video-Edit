@@ -235,3 +235,23 @@ def test_shutdown(tmp_path):
 def test_bad_config_exit_code(tmp_path):
     x = W(tmp_path, engine="evil")
     assert x.p.wait(15) == 2
+
+
+def test_engine_refuses_missing_checkpoints(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("joyai_engine_t", REPO / "runtime" / "joyai_engine.py")
+    eng = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(eng)  # module import is stdlib + numpy only; torch / upstream load inside Engine()
+    (tmp_path / "dit.pth").write_bytes(b"x")
+    (tmp_path / "vae").mkdir()
+    te = tmp_path / "MiMo"
+    te.mkdir()
+    (te / "config.json").write_text("{}")
+    cfg = {"dit_ckpt": str(tmp_path / "dit.pth"), "vae_ckpt": str(tmp_path / "vae"), "text_encoder_ckpt": str(te)}
+    with pytest.raises(eng.EngineError, match=r"text_encoder_ckpt index \(MiMo\)"):
+        eng.check_checkpoints(cfg)
+    (te / "model.safetensors.index.json").write_text("{}")
+    eng.check_checkpoints(cfg)
+    with pytest.raises(eng.EngineError, match=r"dit_ckpt \(gone.pth\).*nothing is downloaded"):
+        eng.check_checkpoints({**cfg, "dit_ckpt": str(tmp_path / "gone.pth")})
