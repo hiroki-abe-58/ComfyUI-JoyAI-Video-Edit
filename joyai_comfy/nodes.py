@@ -193,7 +193,8 @@ class JoyAIVideoEdit(io.ComfyNode):
             "engine": result.get("engine"),
             "manager": result.get("manager"),
         }
-        return io.NodeOutput(images_out, json.dumps(json.loads(redact(json.dumps(report, default=str))), indent=1))
+        text = json.dumps(json.loads(redact(json.dumps(report, default=str))), indent=1)
+        return io.NodeOutput(images_out, text, ui={"text": [text]})
 
 
 class JoyAIUnload(io.ComfyNode):
