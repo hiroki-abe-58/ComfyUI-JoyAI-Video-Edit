@@ -54,10 +54,18 @@ def test_valid_wsl_runtime_defaults():
         ({"max_frames": True}, "max_frames"),
         ({"keep_job_dirs": "yes"}, "keep_job_dirs"),
         ({"require_attention": "fa4"}, "require_attention"),
-        ({"memory_guard": {"max_commit_pct": 95}}, "may not be above 90"),
-        ({"memory_guard": {"hard_stop_commit_pct": 97}}, "may not be above 95"),
-        ({"memory_guard": {"expected_worker_gib": 57.7}}, "may not be below 65"),
-        ({"memory_guard": {"warn_commit_pct": 88}}, "may not be above 85"),
+        ({"memory_guard": {"max_commit_pct": 95}}, "in 1..90"),
+        ({"memory_guard": {"hard_stop_commit_pct": 97}}, "in 1..95"),
+        ({"memory_guard": {"expected_worker_gib": 57.7}}, "in 65..1024"),
+        ({"memory_guard": {"warn_commit_pct": 88}}, "in 1..85"),
+        ({"memory_guard": {"max_commit_pct": float("nan")}}, "in 1..90"),
+        ({"memory_guard": {"hard_stop_commit_pct": float("nan")}}, "in 1..95"),
+        ({"memory_guard": {"expected_worker_gib": float("inf")}}, "in 65..1024"),
+        ({"memory_guard": {"job_factor": 0}}, "in 1.25..100"),
+        ({"memory_guard": {"min_available_gib": 0}}, "in 24..1024"),
+        ({"memory_guard": {"release_tolerance_gib": 1000}}, "in 0..4"),
+        ({"memory_guard": {"release_timeout_s": 1000}}, "in 1..120"),
+        ({"memory_guard": {"margin_gib": -1}}, "in 0..1024"),
         ({"memory_guard": {"bogus": 1}}, "memory_guard may only set"),
         ({"jobs_dir": "relative/jobs"}, "jobs_dir"),
     ],
@@ -126,3 +134,23 @@ def test_host_to_runtime_path_mapping():
             config.host_to_runtime_path(rt, bad)
     rt2 = config.parse_runtime("rt", wsl_raw(wsl_mount_root="/win"))
     assert config.host_to_runtime_path(rt2, r"D:\j") == "/win/d/j"
+
+
+def test_nan_in_the_config_file_is_refused(tmp_path):
+    p = tmp_path / "joyai.runtimes.json"
+    p.write_text(
+        '{"schema_version": 1, "runtimes": {"r": {"kind": "wsl", "distro": "D", "python": "/p", "deploy_dir": "/d", '
+        '"dit_ckpt": "/a", "vae_ckpt": "/b", "text_encoder_ckpt": "/c", "cache_dir": "/e", '
+        '"memory_guard": {"max_commit_pct": NaN}}}}',
+        encoding="utf-8",
+    )
+    with pytest.raises(config.ConfigError, match="NaN is not allowed"):
+        config.load_runtimes(p)
+
+
+def test_shipped_example_config_parses(tmp_path):
+    src = (Path(__file__).resolve().parents[1] / "examples" / "joyai.runtimes.example.json").read_text(encoding="utf-8")
+    p = tmp_path / "joyai.runtimes.json"
+    p.write_text(src.replace("<WSL distro name>", "ExampleDistro"), encoding="utf-8")
+    rts = config.load_runtimes(p)
+    assert list(rts) == ["joyai-rtx5090"] and rts["joyai-rtx5090"].memory_guard == config.GUARD_DEFAULTS

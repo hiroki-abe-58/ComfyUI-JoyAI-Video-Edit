@@ -200,7 +200,7 @@ def test_admission_refuses_unmeasurable(manager, make_rt, monkeypatch):
 
 
 def test_memory_pressure_stops_a_job_at_95(manager, make_rt, monkeypatch):
-    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    rt = make_rt(memory_guard={"enabled": True})
     state = {"commit": 20.0}
     monkeypatch.setattr(memory, "snapshot", snap_of(state))
     manager.load(rt)
@@ -215,7 +215,7 @@ def test_memory_pressure_stops_a_job_at_95(manager, make_rt, monkeypatch):
 
 
 def test_warning_is_logged_once(manager, make_rt, monkeypatch):
-    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    rt = make_rt(memory_guard={"enabled": True})
     state = {"commit": 20.0}
     monkeypatch.setattr(memory, "snapshot", snap_of(state))
     manager.load(rt)
@@ -283,7 +283,7 @@ def test_missing_distro_is_named(manager, make_rt, monkeypatch):
 
 
 def test_unload_enters_releasing_and_load_waits(manager, make_rt, monkeypatch):
-    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    rt = make_rt(memory_guard={"enabled": True})
     state = {"commit": 20.0}
     monkeypatch.setattr(memory, "snapshot", snap_of(state))
     manager.load(rt)
@@ -300,7 +300,7 @@ def test_unload_enters_releasing_and_load_waits(manager, make_rt, monkeypatch):
 
 
 def test_release_timeout_refuses_load(manager, make_rt, monkeypatch):
-    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0, "release_timeout_s": 3.0})
+    rt = make_rt(memory_guard={"enabled": True, "release_timeout_s": 3.0})
     state = {"commit": 20.0}
     monkeypatch.setattr(memory, "snapshot", snap_of(state))
     manager.load(rt)
@@ -313,7 +313,7 @@ def test_release_timeout_refuses_load(manager, make_rt, monkeypatch):
 
 
 def test_release_wait_is_interruptible(manager, make_rt, monkeypatch):
-    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    rt = make_rt(memory_guard={"enabled": True})
     state = {"commit": 20.0}
     monkeypatch.setattr(memory, "snapshot", snap_of(state))
     manager.load(rt)
@@ -326,7 +326,7 @@ def test_release_wait_is_interruptible(manager, make_rt, monkeypatch):
 
 
 def test_quick_release_goes_straight_to_stopped(manager, make_rt, monkeypatch):
-    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    rt = make_rt(memory_guard={"enabled": True})
     monkeypatch.setattr(memory, "snapshot", snap_of({"commit": 20.0}))
     manager.load(rt)
     manager.unload()
@@ -336,7 +336,7 @@ def test_quick_release_goes_straight_to_stopped(manager, make_rt, monkeypatch):
 def test_load_waits_for_admission_after_release(manager, make_rt, monkeypatch):
     """Released (back within tolerance of the pre-load level) but still above the admission cap: keep waiting
     inside the release window, then load once admission passes."""
-    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    rt = make_rt(memory_guard={"enabled": True})
     state = {"commit": 22.0}
     monkeypatch.setattr(memory, "snapshot", snap_of(state))
     manager.load(rt)

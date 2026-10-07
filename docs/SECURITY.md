@@ -6,7 +6,9 @@
   <frozen copy of runtime/joyai_worker.py> <worker.json>`); no shell anywhere. Workflow values travel only inside
   JSON job files.
 - No network listener: control over the wsl.exe stdin/stdout pipes, frames as raw files in a fresh job folder under
-  the ComfyUI temp directory. The worker refuses job paths outside the jobs root and links.
+  a per-user folder outside ComfyUI (%LOCALAPPDATA%\ComfyUI-JoyAI-Video-Edit\jobs by default; ComfyUI deletes its own
+  temp folder at start-up and exit). Folders carry an owner record; cleanup only touches folders of a ComfyUI process
+  that is gone. The worker refuses job paths outside the jobs root and links.
 - Environment: the launcher gets a minimal Windows environment with `WSLENV` empty; the worker drops variables that
   look like credentials, sets Hugging Face offline mode and empties the prompt-enhancement variables.
 - Process ownership: `wsl.exe` runs in a Job Object with KILL_ON_JOB_CLOSE; the worker leads its own process group,

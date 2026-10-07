@@ -21,13 +21,19 @@ class JobFilesError(RuntimeError):
     pass
 
 
-def jobs_root(rt: Runtime) -> Path:
-    if rt.jobs_dir:
-        root = Path(rt.jobs_dir)
-    else:
-        import folder_paths
+OWNER_FILE = "owner.json"
 
-        root = Path(folder_paths.get_temp_directory()) / "joyai"
+
+def default_jobs_root() -> Path:
+    """Per-user folder outside ComfyUI: ComfyUI deletes its own temp folder at start-up and exit, which another ComfyUI
+    process of the same installation would otherwise do under a running worker."""
+    from .singleton import lock_dir
+
+    return lock_dir().parent / "jobs"
+
+
+def jobs_root(rt: Runtime) -> Path:
+    root = Path(rt.jobs_dir) if rt.jobs_dir else default_jobs_root()
     root.mkdir(parents=True, exist_ok=True)
     return root.resolve()
 
@@ -51,11 +57,14 @@ def new_dir(rt: Runtime, kind: str) -> tuple[str, Path]:
     path.mkdir(parents=False, exist_ok=False)
     if _is_link(path):
         raise JobFilesError("job folder is a link")
+    from .singleton import process_identity
+
+    write_json(path / OWNER_FILE, process_identity())  # cleanup of folders left by a dead ComfyUI process checks this
     return ident, path
 
 
 def child(job_dir: Path, name: str) -> Path:
-    if name not in (P.JOB_FILE, P.INPUT_FILE, P.OUTPUT_FILE, P.RESULT_FILE, P.CANCEL_FILE):
+    if name not in (P.JOB_FILE, P.INPUT_FILE, P.OUTPUT_FILE, P.RESULT_FILE, P.CANCEL_FILE, OWNER_FILE):
         raise JobFilesError(f"unexpected job file name {name!r}")
     return job_dir / name
 

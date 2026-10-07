@@ -104,24 +104,48 @@ def test_simultaneous_start_race_has_exactly_one_winner(tmp_path, lock_dir):
     assert sorted(results) == ["in_use", "in_use", "in_use", "loaded"], results
 
 
+def _mk(root, name, owner, worker=True):
+    d = root / name
+    d.mkdir()
+    if worker:
+        (d / "runner.pid").write_text(json.dumps({"pid": 4242, "pgid": 4242, "starttime": 1}))
+        (d / "worker.json").write_text(json.dumps({"owner": owner}))
+    else:
+        (d / "owner.json").write_text(json.dumps(owner))
+    return d
+
+
 def test_stale_cleanup_never_touches_a_live_owner(tmp_path, monkeypatch):
     rt = config.parse_runtime("fake", runtime_raw(tmp_path))
     root = tmp_path / "jobs"
     root.mkdir()
-    calls = []
-    monkeypatch.setattr(M, "run_kill_helper", lambda rt, p, grace_s=5.0: calls.append(p.name) or {"status": "stopped"})
-    for name, owner in (
-        ("worker-20991231-000000-aaaaaaaaaaaa", singleton.process_identity()),  # alive (this process)
-        ("worker-20991231-000001-bbbbbbbbbbbb", None),  # unknown
-        ("worker-20991231-000002-cccccccccccc", {"pid": os.getpid(), "create_time": 1.0}),
-    ):  # gone
-        d = root / name
-        d.mkdir()
-        (d / "runner.pid").write_text(json.dumps({"pid": 4242, "pgid": 4242, "starttime": 1}))
-        (d / "worker.json").write_text(json.dumps({"owner": owner}))
-    m = M.Manager()
-    m._clean_stale(rt)
-    assert calls == ["worker-20991231-000002-cccccccccccc"]
+    killed, removed = [], []
+    monkeypatch.setattr(M, "run_kill_helper", lambda rt, p, grace_s=5.0: killed.append(p.name) or {"status": "stopped"})
+    monkeypatch.setattr(M.jobs, "remove", lambda rt, p: removed.append(p.name))
+    alive, gone = singleton.process_identity(), {"pid": os.getpid(), "create_time": 1.0}
+    # seven live sessions (more than the number of kept logs), one unknown owner, eight dead sessions, job folders
+    for i in range(7):
+        _mk(root, f"worker-20991231-00000{i}-aaaaaaaaaaaa", alive)
+    _mk(root, "worker-20991231-000100-bbbbbbbbbbbb", None)
+    for i in range(8):
+        _mk(root, f"worker-20991231-00020{i}-cccccccccccc", gone)
+    _mk(root, "job-20991231-000300-dddddddddddd", alive, worker=False)
+    _mk(root, "job-20991231-000301-eeeeeeeeeeee", gone, worker=False)
+    M.Manager()._clean_stale(rt)
+    assert killed == [f"worker-20991231-00020{i}-cccccccccccc" for i in range(8)]
+    assert sorted(removed) == sorted([f"worker-20991231-00020{i}-cccccccccccc" for i in range(3)] + ["job-20991231-000301-eeeeeeeeeeee"])
+    assert not any(n.endswith("aaaaaaaaaaaa") or n.endswith("bbbbbbbbbbbb") or n.endswith("dddddddddddd") for n in removed)
+
+
+def test_default_jobs_root_is_outside_comfyui_temp(tmp_path):
+    from joyai_comfy import jobs
+
+    raw = runtime_raw(tmp_path)
+    raw.pop("jobs_dir")
+    rt = config.parse_runtime("fake", raw)
+    assert jobs.jobs_root(rt) == (singleton.lock_dir().parent / "jobs").resolve()
+    jid, d = jobs.new_dir(rt, "job")
+    assert json.loads((d / "owner.json").read_text())["pid"] == os.getpid()
 
 
 def test_memory_guard_is_mandatory_for_wsl(tmp_path):
@@ -144,7 +168,7 @@ def test_memory_guard_is_mandatory_for_wsl(tmp_path):
 def test_release_messages_are_not_repeated_every_poll(tmp_path, monkeypatch):
     from joyai_comfy import memory
 
-    rt = config.parse_runtime("fake", runtime_raw(tmp_path, memory_guard={"enabled": True, "min_available_gib": 0.0}))
+    rt = config.parse_runtime("fake", runtime_raw(tmp_path, memory_guard={"enabled": True}))
     state = {"commit": 22.0}
     monkeypatch.setattr(
         memory,

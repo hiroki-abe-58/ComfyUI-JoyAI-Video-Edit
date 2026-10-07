@@ -511,30 +511,42 @@ class Manager:
             self._lock.release()
 
     def _clean_stale(self, rt: Runtime) -> None:
-        """Once per jobs root: stop workers left behind by a ComfyUI process that is gone (owner record checked: pid +
-        start time), prune old session folders. Workers of a live (or unknown) owner are never touched."""
+        """Once per jobs root: for worker sessions and job folders whose owning ComfyUI process is confirmed gone
+        (owner record: pid + start time), stop any leftover worker and delete the folders, keeping the newest few
+        session logs. Folders of a live or unknown owner - another ComfyUI process - are never touched."""
         root = jobs.jobs_root(rt)
         if str(root) in self._cleaned_roots:
             return
         self._cleaned_roots.add(str(root))
-        sessions = sorted((p for p in root.iterdir() if p.is_dir() and p.name.startswith("worker-")), key=lambda p: p.name)
-        running = None
-        for p in sessions:
-            if not (p / "runner.pid").is_file():
+
+        def owner_of(p: Path):
+            for name, key in (("worker.json", "owner"), (jobs.OWNER_FILE, None)):
+                try:
+                    data = json.loads((p / name).read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                return data.get(key) if key else data
+            return None
+
+        dead_sessions, dead_jobs = [], []
+        for p in sorted(root.iterdir(), key=lambda x: x.name):
+            if not p.is_dir() or not (p.name.startswith("worker-") or p.name.startswith("job-")):
                 continue
-            try:
-                owner = json.loads((p / "worker.json").read_text(encoding="utf-8")).get("owner")
-            except (OSError, ValueError):
-                owner = None
-            if owner_alive(owner) is not False:
-                continue  # owner alive or unknown: never touch another process's (possibly running) worker
-            if running is None:
-                running = distro_running(rt)
-            if running:
-                rep = run_kill_helper(rt, p)
-                if rep.get("status") not in ("not_running", "no_runner_record"):
-                    self._note("stale_worker", session=p.name, helper=rep.get("status"))
-        for p in sessions[:-SESSION_DIRS_KEPT] if not rt.keep_job_dirs else []:
+            if owner_alive(owner_of(p)) is not False:
+                continue  # owner alive or unknown: never touch another process's folders or worker
+            (dead_sessions if p.name.startswith("worker-") else dead_jobs).append(p)
+        running = None
+        for p in dead_sessions:
+            if (p / "runner.pid").is_file():
+                if running is None:
+                    running = distro_running(rt)
+                if running:
+                    rep = run_kill_helper(rt, p)
+                    if rep.get("status") not in ("not_running", "no_runner_record"):
+                        self._note("stale_worker", session=p.name, helper=rep.get("status"))
+        if rt.keep_job_dirs:
+            return
+        for p in dead_sessions[:-SESSION_DIRS_KEPT] + dead_jobs:
             jobs.remove(rt, p)
 
     # -- start / load -----------------------------------------------------------------------------------

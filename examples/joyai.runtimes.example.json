@@ -12,8 +12,7 @@
    "vae_ckpt": "/opt/joyai/deps/checkpoints/JoyAI-Video-Edit/vae",
    "text_encoder_ckpt": "/opt/joyai/deps/checkpoints/MiMo-VL-7B-RL-2508",
    "cache_dir": "/opt/joyai/cache_rtx5090",
-   "load_timeout_s": 1800,
-   "memory_guard": {"max_commit_pct": 95, "margin_gib": 2}
+   "load_timeout_s": 1800
   }
  }
 }

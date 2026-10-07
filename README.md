@@ -27,7 +27,9 @@ Settings outside this profile (portrait video, reference images, other step coun
   (CUTLASS `dcf215af`), SageAttention 2.2.0 @ `d1a57a5` with upstream's `sageattention-cudagraph-stream.patch`.
   FlashAttention 4 must not be installed in that env.
 - About 65 GiB of free Windows commit charge when the model loads (see *Memory*).
-- Disk: ~50 GB for the weights inside the distro, plus the runtime and kernel caches.
+- Disk: ~50 GB for the weights inside the distro, plus the runtime and kernel caches. Each job exchanges raw frames
+  (up to ~0.9 GB for 600 frames) through `%LOCALAPPDATA%\ComfyUI-JoyAI-Video-Edit\jobs` (set `jobs_dir` in the runtime
+  config to move it); the files are deleted after the job.
 The node pack itself has no Python dependencies beyond ComfyUI and never downloads, installs or builds anything.
 
 ## Setup

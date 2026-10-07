@@ -14,6 +14,7 @@ See ``examples/joyai.runtimes.example.json`` and docs/SETUP.md.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -40,13 +41,18 @@ GUARD_DEFAULTS = {
     "release_timeout_s": 120.0,  # after a worker stops: wait at most this long for the WSL VM to return its memory
     "release_tolerance_gib": 4.0,  # released = commit back within this of the pre-load commit
 }
-# Bounds the administrator may not cross: the guard can be made stricter, never looser.
+# Allowed range of every guard value (inclusive). Values may only make the guard stricter than the defaults:
+# lower caps / higher budgets and factors / shorter waits / smaller release tolerance. Non-finite values are refused.
 GUARD_BOUNDS = {
-    "max_commit_pct": ("max", 90.0),
-    "hard_stop_commit_pct": ("max", 95.0),
-    "warn_commit_pct": ("max", 85.0),
-    "expected_worker_gib": ("min", 65.0),
-    "release_timeout_s": ("max", 600.0),
+    "max_commit_pct": (1.0, 90.0),
+    "warn_commit_pct": (1.0, 85.0),
+    "hard_stop_commit_pct": (1.0, 95.0),
+    "expected_worker_gib": (65.0, 1024.0),
+    "margin_gib": (0.0, 1024.0),
+    "job_factor": (1.25, 100.0),
+    "min_available_gib": (24.0, 1024.0),
+    "release_timeout_s": (1.0, 120.0),
+    "release_tolerance_gib": (0.0, 4.0),
 }
 _KEYS = {
     "kind",
@@ -147,12 +153,12 @@ def _guard(raw, rid: str) -> dict:
         if k == "enabled":
             if not isinstance(v, bool):
                 raise ConfigError(f"runtime {rid}: memory_guard.enabled must be true/false")
-        elif not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
-            raise ConfigError(f"runtime {rid}: memory_guard.{k} must be a non-negative number")
-        out[k] = v
-    for k, (kind, bound) in GUARD_BOUNDS.items():
-        if (kind == "max" and out[k] > bound) or (kind == "min" and out[k] < bound):
-            raise ConfigError(f"runtime {rid}: memory_guard.{k} may not be {'above' if kind == 'max' else 'below'} {bound}")
+            out[k] = v
+            continue
+        lo, hi = GUARD_BOUNDS[k]
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or not lo <= v <= hi:
+            raise ConfigError(f"runtime {rid}: memory_guard.{k} must be a number in {lo:g}..{hi:g} (the guard can only be made stricter)")
+        out[k] = float(v)
     return out
 
 
@@ -236,6 +242,10 @@ def parse_runtime(rid: str, raw) -> Runtime:
     )
 
 
+def _no_constants(name: str):
+    raise ConfigError(f"{name} is not allowed in the JoyAI runtime config")
+
+
 def config_path() -> Path | None:
     explicit = os.environ.get(CONFIG_ENV)
     if explicit:
@@ -256,7 +266,7 @@ def load_runtimes(path: Path | None = None) -> dict[str, Runtime]:
     if path.stat().st_size > MAX_CONFIG_BYTES:
         raise ConfigError(f"{path.name} is larger than {MAX_CONFIG_BYTES} bytes")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"), parse_constant=_no_constants)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ConfigError(f"{path.name}: not valid UTF-8 JSON ({exc})") from exc
     if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION or not isinstance(data.get("runtimes"), dict):
