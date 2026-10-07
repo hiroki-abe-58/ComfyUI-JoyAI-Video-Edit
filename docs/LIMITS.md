@@ -11,12 +11,17 @@
   with an unmodified official run, which did not fit this machine's memory. Against that reference the input,
   transport and output layers are byte-identical; the model output differs within roughly the same range as the
   reference differs from itself, but a pre-registered strict rule (cross pairs within the range of two self pairs)
-  was not met for 2 of 3 test cases. No parity claim beyond that is made.
+  was not met for 2 of 3 test cases. A later characterisation with 6 + 6 runs per case found no systematic difference
+  between the paths, and with the random state controlled (test instrumentation only) the ComfyUI output was
+  bit-identical to the reference in some runs. No parity claim beyond "within the observed natural variance of the
+  patched reference" is made.
 - Memory (Windows commit charge, 64 GB RAM + automatic pagefile): a loaded worker plus ComfyUI peaked at about
   85.6 GiB of commit (84 % of the limit at the time); a model load added up to ~62 GiB. The v0 guard therefore asks
   for commit_now + 65 GiB <= 90 % of the current commit limit before a load (on the test machine: at most ~21-26 GiB
   committed before loading, depending on the limit). After the worker stops, the WSL2 VM keeps 25-30 GiB committed
-  until it stops by itself (20-80 s); the Loader shows "Waiting for WSL memory release" and waits up to 120 s.
+  until it stops by itself (20-80 s); the Loader shows "Waiting for WSL memory release" and waits up to 120 s until the
+  load would be admitted (observed 30-76 s with ComfyUI running on the GPU; the remaining margin was 0.1-0.5 GiB).
+- The Edit node's report is an output string (and in /history); it is not drawn on the node.
 - First start compiles kernels (about 14 min without a cache); later starts load in about 80 s.
 - Cancelling during the model load or the first-frame initialisation takes effect only after that step (or by
   stopping the worker).
