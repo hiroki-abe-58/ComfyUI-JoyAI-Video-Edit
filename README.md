@@ -108,7 +108,7 @@ unmodified upstream server using the same placement - not with an unmodified off
 - One JoyAI model per WSL distro on the machine; jobs run one at a time.
 - Not verified: portrait sessions, reference images, other step counts / temporal ids, other GPUs or hosts, the CUDA
   out-of-memory path.
-- The Edit node's report is an output string; it is not drawn on the node.
+- The Edit node's report is an output string; connect a Preview Any node to see it (the sample workflow does).
 
 ## Security
 - Workflows choose a runtime id only. The distro, Linux user, Python, upstream folder and checkpoints come from the

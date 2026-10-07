@@ -23,6 +23,6 @@
 - One JoyAI model per WSL distro on the machine (machine-wide lock across ComfyUI processes).
 - First start compiles kernels (about 14 min without a cache on the test machine); later starts load in about 80 s.
 - Cancelling during the model load or the first-frame initialisation takes effect only after that step.
-- The Edit node's report is an output string (and in /history); it is not drawn on the node.
+- The Edit node's report is an output string (and in /history); connect a Preview Any node to see it.
 - Not verified: portrait sessions, reference images, other step counts / temporal ids, > 600 frames, the CUDA OOM
   path, other GPUs, Linux hosts.

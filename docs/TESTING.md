@@ -13,3 +13,9 @@ Real ComfyUI v0.38.0 queue, RTX 5090, WSL2 worker: 120 / 121 / 240-frame jobs co
 jobs (A -> B -> A); unload / reload, cancel mid-stream / during first-frame init / during load, ComfyUI killed idle
 and busy, worker killed mid-job, missing distro / checkpoint, invalid inputs, job timeout - all handled. Comparison
 with the patched reference: see docs/LIMITS.md.
+## v0.1 release checks (local, 2026-10-08, not CI)
+Real queue on the test machine with the v0.1 surface: 120 / 121-frame jobs on one persistent worker (A -> B -> A),
+an old workflow carrying the removed inputs ran with the fixed profile (the extra inputs are ignored), Unload ->
+"Waiting for WSL memory release" (34 s) -> reload, and a second ComfyUI process was refused with "in use by another
+ComfyUI process" while the first held the model. CPU suite: singleton (exclusive lock, 4-process start race with one
+winner, owner-checked cleanup), mandatory guard, v0.1 surface, release message rate limit.

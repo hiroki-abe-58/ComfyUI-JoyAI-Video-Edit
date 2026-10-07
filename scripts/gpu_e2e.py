@@ -32,18 +32,7 @@ def workflow(a) -> dict:
         "1": {"class_type": "LoadVideo", "inputs": {"file": a.video}},
         "2": {"class_type": "GetVideoComponents", "inputs": {"video": ["1", 0]}},
         "3": {"class_type": "JoyAIRuntimeLoader", "inputs": {"runtime": a.runtime, "idle_unload_minutes": 0}},
-        "4": {
-            "class_type": "JoyAIVideoEdit",
-            "inputs": {
-                "runtime": ["3", 0],
-                "images": ["2", 0],
-                "prompt": a.prompt,
-                "seed": a.seed,
-                "num_inference_steps": 2,
-                "max_temporal_ids": 8,
-                "orientation": "auto",
-            },
-        },
+        "4": {"class_type": "JoyAIVideoEdit", "inputs": {"runtime": ["3", 0], "images": ["2", 0], "prompt": a.prompt, "seed": a.seed}},
         "5": {"class_type": "SaveImage", "inputs": {"images": ["4", 0], "filename_prefix": a.prefix}},
     }
     if a.unload:
