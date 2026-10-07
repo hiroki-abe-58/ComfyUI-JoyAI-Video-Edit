@@ -8,3 +8,8 @@ process control): `COMFYUI_PATH=<ComfyUI v0.38.0 checkout> python -m pytest -q`.
 
 GPU tests (maintainer, not CI): `scripts/gpu_e2e.py` drives a real ComfyUI queue; comparison layers L0-L4 and
 the results are recorded outside the repository until a release.
+## GPU results summary (local, 2026-10-07, not CI)
+Real ComfyUI v0.38.0 queue, RTX 5090, WSL2 worker: 120 / 121 / 240-frame jobs complete with one worker reused across
+jobs (A -> B -> A); unload / reload, cancel mid-stream / during first-frame init / during load, ComfyUI killed idle
+and busy, worker killed mid-job, missing distro / checkpoint, invalid inputs, job timeout - all handled. Comparison
+with the patched reference: see docs/LIMITS.md.
