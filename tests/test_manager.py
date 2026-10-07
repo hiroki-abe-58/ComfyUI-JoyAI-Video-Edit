@@ -276,7 +276,7 @@ def test_missing_distro_is_named(manager, make_rt, monkeypatch):
         "cache_dir": "/e",
     }
     rt = config.parse_runtime("r", raw)
-    monkeypatch.setattr(M, "_wsl_list", lambda rt, *flags: {"JoyAI-Ubuntu", "Other"})
+    monkeypatch.setattr(M, "_wsl_list", lambda rt, *flags: {"ExampleDistro", "Other"})
     with pytest.raises(M.WorkerError, match="'NoSuchDistro' is not installed"):
         manager.load(rt)
     assert manager._worker is None

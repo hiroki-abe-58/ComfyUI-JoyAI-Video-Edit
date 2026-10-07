@@ -12,7 +12,7 @@ from joyai_comfy import config
 def wsl_raw(**over):
     raw = {
         "kind": "wsl",
-        "distro": "JoyAI-Ubuntu",
+        "distro": "ExampleDistro",
         "user": "root",
         "python": "/opt/joyai/env/bin/python",
         "deploy_dir": "/opt/joyai/upstream/deploy",
@@ -27,7 +27,7 @@ def wsl_raw(**over):
 
 def test_valid_wsl_runtime_defaults():
     rt = config.parse_runtime("joyai-5090", wsl_raw())
-    assert rt.kind == "wsl" and rt.distro == "JoyAI-Ubuntu" and rt.user == "root"
+    assert rt.kind == "wsl" and rt.distro == "ExampleDistro" and rt.user == "root"
     assert (rt.width, rt.height) == (840, 480) and rt.max_frames == 600
     assert rt.memory_guard["max_commit_pct"] == 90.0 and rt.memory_guard["hard_stop_commit_pct"] == 95.0
     assert rt.memory_guard["expected_worker_gib"] == 65.0 and rt.memory_guard["warn_commit_pct"] == 85.0
@@ -75,7 +75,7 @@ def test_bad_runtime_ids(rid):
 
 def test_distro_only_for_wsl(tmp_path):
     with pytest.raises(config.ConfigError, match="only valid for kind 'wsl'"):
-        config.parse_runtime("p", runtime_raw(tmp_path, distro="JoyAI-Ubuntu"))
+        config.parse_runtime("p", runtime_raw(tmp_path, distro="ExampleDistro"))
 
 
 def test_guard_can_be_made_stricter_not_looser():

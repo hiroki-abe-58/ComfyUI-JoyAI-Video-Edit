@@ -76,7 +76,7 @@ def test_launcher_argv_is_a_fixed_list_without_shell():
         "r",
         {
             "kind": "wsl",
-            "distro": "JoyAI-Ubuntu",
+            "distro": "ExampleDistro",
             "user": "root",
             "python": "/opt/joyai/env/bin/python",
             "deploy_dir": "/opt/d",
@@ -91,7 +91,7 @@ def test_launcher_argv_is_a_fixed_list_without_shell():
     assert argv[0].lower().endswith("\\system32\\wsl.exe")
     assert argv[1:] == [
         "-d",
-        "JoyAI-Ubuntu",
+        "ExampleDistro",
         "-u",
         "root",
         "--cd",

@@ -1,6 +1,6 @@
 """Maintainer GPU test: drive a running ComfyUI (dedicated test install) through its HTTP queue.
 
-usage: python scripts/gpu_e2e.py --url http://127.0.0.1:8197 --runtime <id> --video <file in ComfyUI/input> --prompt TEXT
+usage: python scripts/gpu_e2e.py --url http://127.0.0.1:<port of a TEST ComfyUI> --runtime <id> --video <file in ComfyUI/input> --prompt TEXT
        [--seed 42] [--prefix name] [--interrupt-after S] [--unload] [--out result.json] [--timeout 1800]
 
 Workflow (API format, core nodes only + this pack): LoadVideo -> GetVideoComponents -> JoyAI Runtime -> JoyAI Video
@@ -42,7 +42,7 @@ def workflow(a) -> dict:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--url", default="http://127.0.0.1:8197")
+    ap.add_argument("--url", required=True, help="base URL of a dedicated test ComfyUI (not your everyday instance)")
     ap.add_argument("--runtime", required=True)
     ap.add_argument("--video", required=True)
     ap.add_argument("--prompt", required=True)
