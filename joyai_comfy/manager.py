@@ -35,6 +35,7 @@ from . import protocol as P
 from .config import Runtime, host_to_runtime_path
 from .process import ProcessTree
 from .redact import redact
+from .singleton import MachineLock, RuntimeInUse, owner_alive, process_identity
 
 PACKAGE_DIR = Path(__file__).resolve().parents[1]
 RUNTIME_DIR = PACKAGE_DIR / "runtime"
@@ -248,6 +249,7 @@ class WorkerProcess:
             "require_attention": rt.require_attention,
             "env": dict(rt.env),
             "jobs_root": host_to_runtime_path(rt, jobs.jobs_root(rt)),
+            "owner": process_identity(),  # the ComfyUI process that owns this worker (stale cleanup never touches live owners)
         }
         jobs.write_json(self.session_dir / "worker.json", cfg)
         argv = launcher_argv(rt, host_to_runtime_path(rt, code / WORKER_SCRIPT), host_to_runtime_path(rt, self.session_dir / "worker.json"), scope=True)
@@ -333,6 +335,7 @@ class Manager:
         self._release_done = threading.Event()
         self._release_done.set()
         self.release: dict = {}  # last release: started, baseline, seconds, released, commit
+        self._mlock: MachineLock | None = None  # machine-wide: one JoyAI model per distro across ComfyUI processes
 
     # -- helpers ----------------------------------------------------------------------------------------
     def _note(self, event: str, **fields) -> None:
@@ -348,6 +351,7 @@ class Manager:
         self._cancel_idle()
         if w is None:
             self._set(ERROR if error else STOPPED)
+            self._release_machine_lock_if_idle()
             return None
         self._set(STOPPING)
         report = w.stop(reason)
@@ -382,6 +386,7 @@ class Manager:
         if not guard["enabled"] or baseline is None or memory.released(memory.snapshot(), baseline, guard):
             self.release.update(released=True, seconds=0.0)
             self._set(final)
+            self._release_machine_lock_if_idle()
             self._release_done.set()
             return
         self._set(RELEASING)
@@ -401,6 +406,7 @@ class Manager:
                 rel.update(released=False, seconds=round(time.time() - rel["started"], 1), commit_gib=snap.get("commit_gib"))
             if self.state == RELEASING:
                 self._set(final)
+            self._release_machine_lock_if_idle()
             self._note("memory_released" if rel["released"] else "release_timeout", **{k: v for k, v in rel.items() if k != "started"})
             self._release_done.set()
 
@@ -416,19 +422,24 @@ class Manager:
         guard = rt.memory_guard
         deadline = rel["started"] + rel.get("timeout_s", guard["release_timeout_s"])
         told = False
+        last = {"key": None, "t": 0.0}
 
-        def tell(text: str) -> None:
+        def tell(text: str, key: str) -> None:
+            # one line when the reason changes, then at most every 30 s (no 2 s spam in the log / on the node)
             nonlocal told
             if not told:
                 self._note("waiting_for_release")
                 told = True
-            if notify:
+            now = time.monotonic()
+            if notify and (key != last["key"] or now - last["t"] >= 30.0):
                 notify(text)
+                last.update(key=key, t=now)
 
         if not self._release_done.is_set():
             tell(
                 f"Waiting for WSL memory release (commit back to <= {rel['baseline_gib'] + rel['tolerance_gib']:.1f} GiB expected; up to "
-                f"{rel['timeout_s']:.0f} s after the previous worker stopped)"
+                f"{rel['timeout_s']:.0f} s after the previous worker stopped)",
+                "release",
             )
             while not self._release_done.wait(0.5):
                 if interrupted():
@@ -445,12 +456,37 @@ class Manager:
                 if told and notify:
                     notify(f"WSL memory released after {round(time.time() - rel['started'], 1)} s")
                 return
-            tell(f"Waiting for WSL memory release: {why}")
+            tell(f"Waiting for WSL memory release: {why}", "admission")
             end = time.monotonic() + 2.0
             while time.monotonic() < end:
                 if interrupted():
                     raise JobCancelled("cancelled while waiting for the WSL memory release")
                 time.sleep(0.25)
+
+    @staticmethod
+    def _lock_name(rt: Runtime) -> str:
+        return f"wsl-{rt.distro}" if rt.kind == "wsl" else f"posix-{rt.id}"
+
+    def _acquire_machine_lock(self, rt: Runtime) -> None:
+        name = self._lock_name(rt)
+        if self._mlock is not None and self._mlock.name != name and self._worker is None:
+            self._mlock.release()
+            self._mlock = None
+        if self._mlock is None:
+            self._mlock = MachineLock(name)
+        if self._mlock.acquire({"runtime_id": rt.id}):
+            return
+        owner = self._mlock.owner() or {}
+        self._note("machine_lock_busy", lock=name, owner_pid=owner.get("pid"))
+        raise RuntimeInUse(
+            f"the JoyAI runtime for WSL distro {rt.distro!r} is in use by another ComfyUI process"
+            + (f" (pid {owner.get('pid')})" if owner.get("pid") else "")
+            + "; only one JoyAI model may be loaded per distro on this machine - unload it there (JoyAI Unload) and retry"
+        )
+
+    def _release_machine_lock_if_idle(self) -> None:
+        if self._mlock is not None and self._worker is None and self.state in (STOPPED, ERROR):
+            self._mlock.release()
 
     def _cancel_idle(self) -> None:
         if self._idle_timer is not None:
@@ -475,7 +511,8 @@ class Manager:
             self._lock.release()
 
     def _clean_stale(self, rt: Runtime) -> None:
-        """Once per jobs root: stop workers left behind by an earlier ComfyUI process, prune old session folders."""
+        """Once per jobs root: stop workers left behind by a ComfyUI process that is gone (owner record checked: pid +
+        start time), prune old session folders. Workers of a live (or unknown) owner are never touched."""
         root = jobs.jobs_root(rt)
         if str(root) in self._cleaned_roots:
             return
@@ -483,13 +520,20 @@ class Manager:
         sessions = sorted((p for p in root.iterdir() if p.is_dir() and p.name.startswith("worker-")), key=lambda p: p.name)
         running = None
         for p in sessions:
-            if (p / "runner.pid").is_file():
-                if running is None:
-                    running = distro_running(rt)
-                if running:
-                    rep = run_kill_helper(rt, p)
-                    if rep.get("status") not in ("not_running", "no_runner_record"):
-                        self._note("stale_worker", session=p.name, helper=rep.get("status"))
+            if not (p / "runner.pid").is_file():
+                continue
+            try:
+                owner = json.loads((p / "worker.json").read_text(encoding="utf-8")).get("owner")
+            except (OSError, ValueError):
+                owner = None
+            if owner_alive(owner) is not False:
+                continue  # owner alive or unknown: never touch another process's (possibly running) worker
+            if running is None:
+                running = distro_running(rt)
+            if running:
+                rep = run_kill_helper(rt, p)
+                if rep.get("status") not in ("not_running", "no_runner_record"):
+                    self._note("stale_worker", session=p.name, helper=rep.get("status"))
         for p in sessions[:-SESSION_DIRS_KEPT] if not rt.keep_job_dirs else []:
             jobs.remove(rt, p)
 
@@ -532,12 +576,14 @@ class Manager:
                 self.last_error = f"WSL distro {rt.distro!r} is not installed (see `wsl.exe -l -v`)"
                 raise WorkerError(f"{self.last_error}; check the runtime {rt.id!r} in the JoyAI runtime config")
             self._wait_release(rt, interrupted, notify)  # never start a model load on residual commit of the previous worker
+            self._acquire_machine_lock(rt)  # never two JoyAI models of one distro on this machine (any ComfyUI process)
             self._clean_stale(rt)
             snap = memory.snapshot()
             ok, why = memory.check_admission(snap, rt.memory_guard, rt.memory_guard["expected_worker_gib"], start=True)
             self._note("admission_start", ok=ok, commit_gib=snap.get("commit_gib"), limit_gib=snap.get("commit_limit_gib"), detail=why)
             if not ok:
                 self.last_error = why
+                self._release_machine_lock_if_idle()
                 raise AdmissionRefused(why)
             w = WorkerProcess(rt, ident)
             w.preload_commit = snap.get("commit_gib")
@@ -579,7 +625,6 @@ class Manager:
         steps: int,
         temporal_ids: int,
         orientation: str,
-        reference: np.ndarray | None = None,
         interrupted: Callable[[], bool] = lambda: False,
         on_progress: Callable[[int, int], None] | None = None,
         timeout_s: float | None = None,
@@ -619,9 +664,6 @@ class Manager:
                     "orientation": orientation,
                     "reference": None,
                 }
-                if reference is not None:
-                    ref = np.ascontiguousarray(reference[:1])
-                    job["reference"] = {"height": int(ref.shape[1]), "width": int(ref.shape[2]), "sha256": jobs.write_u8(jobs.child(job_dir, P.REF_FILE), ref)}
                 P.validate_job(job)
                 jobs.write_json(jobs.child(job_dir, P.JOB_FILE), job)
                 write_s = time.time() - t0

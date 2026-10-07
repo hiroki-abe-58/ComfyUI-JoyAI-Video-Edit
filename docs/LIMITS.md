@@ -1,27 +1,28 @@
-# Limits (v0, local)
+# Limits (v0.1)
 
-- Verified only on Windows 11 + WSL2 + RTX 5090 32 GB, profile 840x480, steps 2, max_temporal_ids 8, raw prompts,
-  no reference image, no prompt enhancement, gates off. Portrait orientation and the reference image are untested.
+- Verified only on Windows 11 + WSL2 + RTX 5090 32 GB with the fixed v0.1 profile: 840x480 landscape session, 2 steps,
+  8 temporal ids, raw prompts, no reference image, no prompt enhancement, gates off. The node exposes nothing else;
+  taller-than-wide input is refused.
 - Up to 600 frames per job (the upstream server starts a new session every 600 frames; not replicated).
-- Not bitwise repeatable, also with the same seed. Upstream samples VAE latents from the global CUDA RNG, which is not
-  reseeded per session, so a result depends on what the worker ran before; SageAttention / FP8 fast-accumulation
-  kernels add further variation. In our runs, the same input, prompt and seed gave per-frame mean differences of
-  about 1.0-1.5 (synthetic scene) and 4-6 (upstream example, watercolor prompt) levels out of 255 between repeats.
-- Results are compared with a PATCHED_REFERENCE (upstream server with the same low host-RAM weight placement), not
-  with an unmodified official run, which did not fit this machine's memory. Against that reference the input,
-  transport and output layers are byte-identical; the model output differs within roughly the same range as the
-  reference differs from itself, but a pre-registered strict rule (cross pairs within the range of two self pairs)
-  was not met for 2 of 3 test cases. A later characterisation with 6 + 6 runs per case found no systematic difference
-  between the paths, and with the random state controlled (test instrumentation only) the ComfyUI output was
-  bit-identical to the reference in some runs. No parity claim beyond "within the observed natural variance of the
-  patched reference" is made.
-- Memory (Windows commit charge, 64 GB RAM + automatic pagefile): a loaded worker plus ComfyUI peaked at about
-  85.6 GiB of commit (84 % of the limit at the time); a model load added up to ~62 GiB. The v0 guard therefore asks
-  for commit_now + 65 GiB <= 90 % of the current commit limit before a load (on the test machine: at most ~21-26 GiB
-  committed before loading, depending on the limit). After the worker stops, the WSL2 VM keeps 25-30 GiB committed
-  until it stops by itself (20-80 s); the Loader shows "Waiting for WSL memory release" and waits up to 120 s until the
-  load would be admitted (observed 30-76 s with ComfyUI running on the GPU; the remaining margin was 0.1-0.5 GiB).
+- Not bitwise repeatable, also with the same seed (upstream samples part of the latent from the process-wide CUDA
+  random state, not reset per job; asynchronous workers and SageAttention / FP8 fast-accumulation kernels add
+  variation). Typical frame differences between two runs: ~1.1-1.3 (synthetic scene) and ~3.9-4.2 (upstream example,
+  watercolor prompt) levels out of 255.
+- Parity: compared with a PATCHED_REFERENCE (unmodified upstream server with the same low host-RAM weight placement),
+  not with an unmodified official run (UNMODIFIED_OFFICIAL_REAL_WEIGHT_E2E = NOT_RUN_RESOURCE_BLOCKED). Input,
+  transport and output layers are byte-identical; model outputs are within the observed natural variance of the
+  patched reference (6 + 6 runs per case): PATCHED_REFERENCE_PARITY_WITHIN_OBSERVED_NATURAL_VARIANCE. A stricter,
+  earlier rule with two repeat pairs per case was not met for 2 of 3 cases (kept on record). With the random state
+  controlled by test-only instrumentation, the ComfyUI output was bit-identical to the reference in some runs.
+- Memory (Windows commit charge, 64 GB RAM + automatic pagefile): peaks of 84-86 GiB commit with ComfyUI + worker;
+  a model load added up to ~62 GiB. Load admission: commit_now + 65 GiB <= 90 % of the current commit limit; no new
+  load or job at >= 90 %; warning at >= 85 %; a running job stops at 95 %. The guard is mandatory for WSL runtimes.
+- After a worker stops, the WSL2 VM keeps 25-30 GiB committed until it stops by itself; the Loader shows "Waiting
+  for WSL memory release" and waits up to 120 s until a load would be admitted (observed 30-80 s, sometimes longer
+  than a minute).
+- One JoyAI model per WSL distro on the machine (machine-wide lock across ComfyUI processes).
+- First start compiles kernels (about 14 min without a cache on the test machine); later starts load in about 80 s.
+- Cancelling during the model load or the first-frame initialisation takes effect only after that step.
 - The Edit node's report is an output string (and in /history); it is not drawn on the node.
-- First start compiles kernels (about 14 min without a cache); later starts load in about 80 s.
-- Cancelling during the model load or the first-frame initialisation takes effect only after that step (or by
-  stopping the worker).
+- Not verified: portrait sessions, reference images, other step counts / temporal ids, > 600 frames, the CUDA OOM
+  path, other GPUs, Linux hosts.

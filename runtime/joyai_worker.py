@@ -52,6 +52,7 @@ _CONFIG_KEYS = {
     "require_attention",
     "env",
     "jobs_root",
+    "owner",  # {pid, create_time} of the ComfyUI process that started this worker (informational)
 }
 
 
@@ -405,10 +406,7 @@ class Worker:
             self.job_dir = job_dir
             self.frames_done = 0
             frames = self._read_frames(job_dir / P.INPUT_FILE, job["frames"], job["height"], job["width"], job["input_sha256"])
-            ref = None
-            if job["reference"] is not None:
-                r = job["reference"]
-                ref = self._read_frames(job_dir / P.REF_FILE, 1, r["height"], r["width"], r["sha256"])[0]
+            ref = None  # v0.1: reference images are refused by the protocol
             read_s = time.time() - t0
             self.proto.send("accepted", request_id=rid, job_id=job_id)  # from here on the job is never re-sent
             out, info = self.engine.run(

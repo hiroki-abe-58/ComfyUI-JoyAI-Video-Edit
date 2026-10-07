@@ -7,7 +7,7 @@ import pytest
 import torch
 
 from joyai_comfy import protocol as P
-from joyai_comfy.validate import InputError, images_to_u8, orientation_for, u8_to_images, validate_images, validate_prompt
+from joyai_comfy.validate import InputError, images_to_u8, require_landscape, u8_to_images, validate_images, validate_prompt
 
 
 def test_every_byte_value_round_trips_exactly():
@@ -74,11 +74,15 @@ def test_prompt_ok():
     assert validate_prompt("make it snow") == "make it snow"
 
 
-def test_orientation_rule():
-    assert orientation_for("auto", 720, 1280) == "landscape"
-    assert orientation_for("auto", 1280, 720) == "portrait"
-    assert orientation_for("auto", 512, 512) == "landscape"
-    assert orientation_for("portrait", 480, 840) == "portrait"
+def test_landscape_only():
+    require_landscape(720, 1280)
+    require_landscape(512, 512)  # square counts as landscape (the verified 840x480 session)
+    with pytest.raises(InputError, match="landscape input only"):
+        require_landscape(1280, 720)
+
+
+def test_v01_profile_constants():
+    assert P.STEPS_RANGE == (2, 2) and P.TEMPORAL_IDS_RANGE == (8, 8) and P.ORIENTATIONS == ("landscape",)
 
 
 def job(**over):

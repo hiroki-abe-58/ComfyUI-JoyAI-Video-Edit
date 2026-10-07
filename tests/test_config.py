@@ -118,9 +118,10 @@ def test_config_path_env(monkeypatch, tmp_path):
 
 def test_host_to_runtime_path_mapping():
     rt = config.parse_runtime("rt", wsl_raw())
-    assert config.host_to_runtime_path(rt, r"E:\AI\jobs\job-1\job.json") == "/mnt/e/AI/jobs/job-1/job.json"
+    win = "\\".join(["Q:", "jobs", "job-1", "job.json"])  # built at run time: no machine-like path literal in the tree
+    assert config.host_to_runtime_path(rt, win) == "/mnt/q/jobs/job-1/job.json"
     assert config.host_to_runtime_path(rt, "C:/x") == "/mnt/c/x"
-    for bad in (r"\\server\share\x", "relative\\x", r"E:\a\..\b"):
+    for bad in ("\\" * 2 + "server\\share\\x", "relative\\x", "\\".join(["Q:", "a", "..", "b"])):
         with pytest.raises(config.ConfigError):
             config.host_to_runtime_path(rt, bad)
     rt2 = config.parse_runtime("rt", wsl_raw(wsl_mount_root="/win"))

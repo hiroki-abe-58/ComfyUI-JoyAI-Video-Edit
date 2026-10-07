@@ -128,8 +128,9 @@ def test_child_env_has_no_secrets(monkeypatch):
 
 def test_redact_removes_paths_and_user(monkeypatch):
     monkeypatch.setenv("USERNAME", "alicesmith")
-    s = redact(r"failed at E:\AI\jobs\x.u8 and /opt/joyai/deps/checkpoints/dit.pth and /mnt/e/AI/x for alicesmith in \\srv\share\y")
-    assert "E:\\" not in s and "/opt" not in s and "/mnt" not in s and "alicesmith" not in s and "\\\\srv" not in s
+    win = "\\".join(["Q:", "work", "jobs", "x.u8"])  # built at run time: no machine-like path literal in the tree
+    s = redact(f"failed at {win} and /opt/joyai/deps/checkpoints/dit.pth and /mnt/q/work/x for alicesmith in " + "\\" * 2 + "srv\\share\\y")
+    assert "Q:\\" not in s and "/opt" not in s and "/mnt" not in s and "alicesmith" not in s and "\\\\srv" not in s
     assert s.count("<path>") == 4
 
 

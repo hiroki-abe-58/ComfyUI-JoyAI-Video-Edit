@@ -15,6 +15,9 @@ administrator installs once inside a dedicated WSL2 distribution; the pack never
    `COMFYUI_JOYAI_CONFIG` at it) and fill in the distro name and paths. Workflows can only pick a runtime id.
 4. Optional: `python -I -B runtime/joyai_doctor.py <config> --gpu` inside the distro for the staged checks.
 
-Memory: on Windows the WSL2 worker's GPU and pinned host memory count against the system commit charge. A loaded
-worker added ~55 GiB of commit on the test machine (64 GB RAM + automatic pagefile). The admission check refuses
-to start unless commit + 57.7 GiB + 2 GiB stays at or below 95 % of the current commit limit.
+Memory: on Windows the WSL2 worker's GPU and pinned host memory count against the system commit charge. A load added
+up to ~62 GiB of commit on the test machine (64 GB RAM + automatic pagefile). The admission check refuses to start
+unless commit + 65 GiB stays at or below 90 % of the current commit limit (see README "Memory").
+
+Dedicated distro: use a WSL2 distribution that runs nothing but this runtime. The tested setup runs the worker as
+root there (see docs/SECURITY.md for the reasons and a non-root route).

@@ -10,16 +10,18 @@
 - Environment: the launcher gets a minimal Windows environment with `WSLENV` empty; the worker drops variables that
   look like credentials, sets Hugging Face offline mode and empties the prompt-enhancement variables.
 - Process ownership: `wsl.exe` runs in a Job Object with KILL_ON_JOB_CLOSE; the worker leads its own process group,
-  exits on stdin EOF, and a kill helper (pid + start time + command line checks) removes leftovers.
-- Memory guard (v0): a model load needs commit_now + 65 GiB <= 90 % of the current commit limit; no new load or job at
+  exits on stdin EOF, and a kill helper (pid + start time + command line checks) removes leftovers of ComfyUI
+  processes that are gone (owner pid + start time recorded); workers of a live ComfyUI process are never touched.
+- One model per distro on the machine: an exclusive lock-file handle (kernel-enforced, released by the OS when the
+  process ends) is held from admission until the worker's memory is released.
+- Memory guard (v0.1, mandatory for WSL runtimes): a model load needs commit_now + 65 GiB <= 90 % of the current commit limit; no new load or job at
   >= 90 %; warning at >= 85 %; a running job is stopped as soon as commit reaches 95 %. After a worker stops, the
   Loader waits (up to 120 s, shown as "Waiting for WSL memory release") until the commit charge is back near its
   pre-load level instead of starting a load on residual memory. The configuration can make this stricter, never looser.
 - Messages and reports redact absolute paths and the user name.
 This is isolation of configuration and arguments, not a sandbox: the runtime runs with the rights of the user that
 started ComfyUI (root inside the dedicated distro in the tested setup).
-## Draft note for the release review: the worker runs as root inside a dedicated distro
-Status: accepted for local testing (Stage G); to be re-judged in the release review.
+## The worker runs as root inside a dedicated distro
 - Why root today: the tested runtime (Python env, compiled kernels, inductor / Triton caches, checkpoints under
   `/opt/joyai`) was installed and validated as root; the optional `memory_max` cgroup scope uses the system
   `systemd-run --scope`, which needs root. The model itself does not need root.

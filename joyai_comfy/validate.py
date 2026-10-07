@@ -70,8 +70,8 @@ def sha256_bytes(buf) -> str:
     return hashlib.sha256(memoryview(buf)).hexdigest()
 
 
-def orientation_for(choice: str, h: int, w: int) -> str:
-    """auto follows the upstream server rule: requested height > width -> portrait, else landscape."""
-    if choice == "auto":
-        return "portrait" if h > w else "landscape"
-    return choice
+def require_landscape(h: int, w: int) -> None:
+    """v0.1 runs the verified landscape session (840x480) only; taller-than-wide input would need the untested portrait
+    session, so it is refused instead of being squeezed or switched."""
+    if h > w:
+        raise InputError(f"images: {w}x{h} is taller than wide; v0.1 supports landscape input only (width >= height) - rotate or crop it first")

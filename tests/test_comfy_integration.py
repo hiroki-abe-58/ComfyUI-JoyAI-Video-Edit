@@ -55,8 +55,8 @@ def test_nodes_registered_as_v3(comfy):
     info = m["JoyAIRuntimeLoader"].INPUT_TYPES()
     assert info["required"]["runtime"][1]["options"] == ["fake-runtime"]
     edit = m["JoyAIVideoEdit"].INPUT_TYPES()
-    assert set(edit["required"]) == {"runtime", "images", "prompt", "seed", "num_inference_steps", "max_temporal_ids", "orientation"}
-    assert set(edit["optional"]) == {"reference_image"}
+    assert set(edit["required"]) == {"runtime", "images", "prompt", "seed"}  # v0.1: no unverified knobs
+    assert not edit.get("optional")
     assert m["JoyAIUnload"].OUTPUT_NODE
 
 
@@ -92,3 +92,26 @@ def test_unknown_runtime_message(comfy):
     m = comfy["nodes"].NODE_CLASS_MAPPINGS
     with pytest.raises(RuntimeError, match="not defined"):
         m["JoyAIRuntimeLoader"].execute(runtime="nope", idle_unload_minutes=0)
+
+
+def test_portrait_input_is_refused_by_the_node(comfy):
+    import torch
+
+    m = comfy["nodes"].NODE_CLASS_MAPPINGS
+    handle = m["JoyAIRuntimeLoader"].execute(runtime="fake-runtime", idle_unload_minutes=0).result[0]
+    try:
+        with pytest.raises(ValueError, match="landscape input only"):
+            m["JoyAIVideoEdit"].execute(runtime=handle, images=torch.zeros(2, 96, 64, 3), prompt="x", seed=1)
+        out = m["JoyAIVideoEdit"].execute(runtime=handle, images=torch.zeros(2, 64, 64, 3), prompt="x", seed=1).result
+        assert json.loads(out[1])["profile"] == {"num_inference_steps": 2, "max_temporal_ids": 8, "orientation": "landscape"}
+    finally:
+        m["JoyAIUnload"].execute()
+
+
+def test_unverified_inputs_are_ignored_not_honoured(comfy):
+    """An old / hand-written workflow that still carries the removed inputs cannot reach them."""
+    m = comfy["nodes"].NODE_CLASS_MAPPINGS
+    import inspect
+
+    params = set(inspect.signature(m["JoyAIVideoEdit"].execute).parameters)
+    assert params == {"runtime", "images", "prompt", "seed"}

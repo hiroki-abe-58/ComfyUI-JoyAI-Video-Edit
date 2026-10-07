@@ -10,9 +10,15 @@ the administrator installs separately, with its build dependencies (joyomni_ops,
 2.0; CUTLASS - BSD-3-Clause), and loads weights the administrator downloads: jdopensource/JoyAI-Video-Edit
 (Apache License 2.0) and XiaomiMiMo/MiMo-VL-7B-RL-2508 (MIT License). See docs/SETUP.md.
 
-runtime/joyai_lowram/ replaces only how upstream's DiT and text-encoder weights are placed in memory (the same
-checkpoints, parameters, dtypes and FP8 recipe; see the module docstrings). Results of this pack are compared with
-that patched reference, not with an unmodified official run.
+Portions adapted from JoyAI-Video-Edit (https://github.com/jd-opensource/JoyAI-Video-Edit, commit ca17e1d),
+Copyright the JoyAI-Video-Edit authors / JD.com, licensed under the Apache License, Version 2.0:
+- runtime/joyai_lowram/dit_loader.py and te_loader.py re-implement the weight placement of upstream
+  deploy/xvideo/models/models.py (load_dit / load_text_encoder in low-VRAM mode) and follow its checkpoint key
+  handling, dtype rule and per-block FP8 installation order; a few lines match upstream verbatim.
+- runtime/joyai_engine.py replicates small parts of upstream deploy/xvideo/serving/serve_joyomni_streaming.py
+  (the session-size snapping rule, the file-mode session settings and the start-up calls it makes before loading).
+These files were modified: they load the same checkpoints with a different memory placement and drive the
+upstream in-process API without the upstream web server. Model math, weights and the FP8 recipe are upstream's.
 
 The process-control, configuration and kill-helper code is adapted from ComfyUI-MonarchRT and ComfyUI-LeapTalk
 (https://github.com/hiroki-abe-58), Copyright 2026 hiroki-abe-58, Apache License 2.0.

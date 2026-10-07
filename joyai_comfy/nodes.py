@@ -10,12 +10,16 @@ from comfy_api.latest import ComfyExtension, io
 from . import config, memory
 from . import protocol as P
 from .manager import MANAGER, AdmissionRefused, JobCancelled, JobTimeout, ReleaseTimeout, WorkerError
+from .singleton import RuntimeInUse
 from .redact import redact
-from .validate import InputError, images_to_u8, orientation_for, u8_to_images, validate_images, validate_prompt
+from .validate import InputError, images_to_u8, require_landscape, u8_to_images, validate_images, validate_prompt
 
 JoyAIRuntime = io.Custom("JOYAI_RUNTIME")
 CATEGORY = "JoyAI/Video Edit"
 NO_RUNTIME = "(no runtime configured)"
+# v0.1 = the profile verified on real hardware; not exposed as inputs (see docs/LIMITS.md)
+V01_STEPS = P.STEPS_RANGE[0]
+V01_TEMPORAL_IDS = P.TEMPORAL_IDS_RANGE[0]
 
 
 def _runtime_ids() -> list[str]:
@@ -112,7 +116,7 @@ class JoyAIRuntimeLoader(io.ComfyNode):
             _raise_interrupt_or("JoyAI runtime start was cancelled")
         except ReleaseTimeout as exc:
             raise RuntimeError(f"Waiting for WSL memory release timed out: {redact(exc)}") from None
-        except (AdmissionRefused, WorkerError, JobTimeout) as exc:
+        except (AdmissionRefused, WorkerError, JobTimeout, RuntimeInUse) as exc:
             raise RuntimeError(redact(exc)) from None
         snap = memory.snapshot()
         status["memory"] = {k: snap.get(k) for k in ("commit_gib", "commit_limit_gib", "commit_pct", "available_gib")}
@@ -128,47 +132,22 @@ class JoyAIVideoEdit(io.ComfyNode):
             display_name="JoyAI Video Edit",
             category=CATEGORY,
             description=(
-                "Edits a video (IMAGE batch, RGB) with a text instruction using JoyAI-Video-Edit's streaming model, frame by "
-                "frame in 8-frame chunks. Output = one frame per input frame at the runtime's session size (840x480 or "
-                "480x840); inputs are resized like the upstream server (bicubic, no crop). Not bitwise repeatable."
+                "Edits a landscape video (IMAGE batch, RGB, width >= height, up to 600 frames) with a text instruction using "
+                "JoyAI-Video-Edit's streaming model in 8-frame chunks. v0.1 runs only the verified profile: 840x480 session, "
+                "2 steps, 8 temporal ids, no reference image. Output = one frame per input frame at 840x480; inputs are "
+                "resized like the upstream server (bicubic, no crop). Not bitwise repeatable."
             ),
             inputs=[
                 JoyAIRuntime.Input("runtime"),
                 io.Image.Input("images", tooltip=f"Video frames, RGB, 1..{P.MAX_FRAMES} frames"),
                 io.String.Input("prompt", multiline=True, default="", tooltip="Edit instruction (raw prompt; prompt enhancement is not used)"),
                 io.Int.Input("seed", default=42, min=P.SEED_RANGE[0], max=P.SEED_RANGE[1], control_after_generate=False),
-                io.Int.Input(
-                    "num_inference_steps",
-                    default=2,
-                    min=P.STEPS_RANGE[0],
-                    max=P.STEPS_RANGE[1],
-                    advanced=True,
-                    tooltip="Upstream default 2 (the only value verified with this pack)",
-                ),
-                io.Int.Input(
-                    "max_temporal_ids",
-                    default=8,
-                    min=P.TEMPORAL_IDS_RANGE[0],
-                    max=P.TEMPORAL_IDS_RANGE[1],
-                    advanced=True,
-                    tooltip="Upstream default 8 (the only value verified with this pack)",
-                ),
-                io.Combo.Input(
-                    "orientation",
-                    options=list(P.ORIENTATIONS),
-                    default="auto",
-                    advanced=True,
-                    tooltip="auto = portrait when the input is taller than wide (upstream server rule)",
-                ),
-                io.Image.Input(
-                    "reference_image", optional=True, tooltip="Optional reference image (first image of the batch is used); not verified with this pack"
-                ),
             ],
             outputs=[io.Image.Output(display_name="images"), io.String.Output(display_name="report")],
         )
 
     @classmethod
-    def execute(cls, runtime, images, prompt, seed, num_inference_steps=2, max_temporal_ids=8, orientation="auto", reference_image=None) -> io.NodeOutput:
+    def execute(cls, runtime, images, prompt, seed) -> io.NodeOutput:
         import comfy.utils
 
         if not isinstance(runtime, dict) or "runtime_id" not in runtime:
@@ -177,14 +156,10 @@ class JoyAIVideoEdit(io.ComfyNode):
         try:
             n, h, w = validate_images(images, max_frames=rt.max_frames)
             prompt = validate_prompt(prompt)
-            ref = None
-            if reference_image is not None:
-                validate_images(reference_image[:1], max_frames=1, what="reference_image")
-                ref = images_to_u8(reference_image[:1])
+            require_landscape(h, w)
         except InputError as exc:
             raise ValueError(str(exc)) from None
         frames = images_to_u8(images)
-        orient = orientation_for(orientation, h, w)
         bar = comfy.utils.ProgressBar(n)
         try:
             result, out = MANAGER.edit(
@@ -192,10 +167,9 @@ class JoyAIVideoEdit(io.ComfyNode):
                 frames,
                 prompt=prompt,
                 seed=int(seed),
-                steps=int(num_inference_steps),
-                temporal_ids=int(max_temporal_ids),
-                orientation=orient,
-                reference=ref,
+                steps=V01_STEPS,
+                temporal_ids=V01_TEMPORAL_IDS,
+                orientation="landscape",
                 interrupted=_interrupted,
                 on_progress=lambda done, total: bar.update_absolute(done, total),
             )
@@ -211,7 +185,7 @@ class JoyAIVideoEdit(io.ComfyNode):
             "frames_out": int(out.shape[0]),
             "input_size": [h, w],
             "output_size": [int(out.shape[1]), int(out.shape[2])],
-            "orientation": orient,
+            "profile": {"num_inference_steps": V01_STEPS, "max_temporal_ids": V01_TEMPORAL_IDS, "orientation": "landscape"},
             "worker": result.get("worker"),
             "engine": result.get("engine"),
             "manager": result.get("manager"),

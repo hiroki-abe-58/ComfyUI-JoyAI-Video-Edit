@@ -33,19 +33,18 @@ ID_RE = re.compile(r"[A-Za-z0-9_-]{8,80}")
 REQUESTS = ("edit", "cancel", "status", "shutdown")
 REPLIES = ("hello", "ready", "accepted", "progress", "result", "cancelled", "error", "status", "bye")
 
-# Limits of v0 (verified range in parentheses; see docs/LIMITS.md)
+# v0.1 surface = the profile verified on real hardware only (docs/LIMITS.md); anything else is refused here, on both sides
 MAX_FRAMES = 600  # upstream server starts a new session every 600 frames (kv_reset_frames); refused above
 MIN_SIDE = 64
 MAX_SIDE = 4096
 MAX_PROMPT_CHARS = 4000
-STEPS_RANGE = (1, 8)  # (2 verified)
-TEMPORAL_IDS_RANGE = (1, 64)  # (8 verified)
+STEPS_RANGE = (2, 2)  # upstream default, the only value verified
+TEMPORAL_IDS_RANGE = (8, 8)  # upstream default, the only value verified
 SEED_RANGE = (0, 2**31 - 1)
-ORIENTATIONS = ("auto", "landscape", "portrait")
+ORIENTATIONS = ("landscape",)  # portrait sessions were never run
 
 JOB_FILE = "job.json"
 INPUT_FILE = "input.u8"
-REF_FILE = "reference.u8"
 OUTPUT_FILE = "output.u8"
 RESULT_FILE = "result.json"
 CANCEL_FILE = "CANCEL"
@@ -64,7 +63,6 @@ JOB_KEYS = {
     "orientation",
     "reference",
 }
-REF_KEYS = {"height", "width", "sha256"}
 
 
 class ProtocolError(ValueError):
@@ -122,13 +120,8 @@ def validate_job(job) -> dict:
     _int(job, "max_temporal_ids", *TEMPORAL_IDS_RANGE)
     if job.get("orientation") not in ORIENTATIONS:
         raise ProtocolError(f"orientation must be one of {ORIENTATIONS}")
-    ref = job.get("reference")
-    if ref is not None:
-        if not isinstance(ref, dict) or set(ref) != REF_KEYS:
-            raise ProtocolError("reference must be {height, width, sha256}")
-        _int(ref, "height", MIN_SIDE, MAX_SIDE)
-        _int(ref, "width", MIN_SIDE, MAX_SIDE)
-        _sha(ref, "sha256")
+    if job.get("reference") is not None:
+        raise ProtocolError("reference images are not supported in v0.1")
     return job
 
 

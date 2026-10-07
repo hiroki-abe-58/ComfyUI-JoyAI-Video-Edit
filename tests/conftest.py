@@ -42,6 +42,12 @@ def runtime_raw(tmp_path: Path, **over) -> dict:
     return raw
 
 
+@pytest.fixture(autouse=True)
+def _own_lock_dir(tmp_path, monkeypatch):
+    """Every test gets its own machine-lock folder (the real one is per user under LOCALAPPDATA)."""
+    monkeypatch.setenv("JOYAI_LOCK_DIR", str(tmp_path / "locks"))
+
+
 @pytest.fixture
 def make_rt(tmp_path):
     from joyai_comfy import config

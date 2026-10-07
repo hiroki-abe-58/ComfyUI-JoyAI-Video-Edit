@@ -202,6 +202,9 @@ def parse_runtime(rid: str, raw) -> Runtime:
         raise ConfigError(f"runtime {rid}: job_timeout_per_frame_s must be a number in (0, 600]")
     width = _int(raw, "width", 840, 64, 4096, rid)
     height = _int(raw, "height", 480, 64, 4096, rid)
+    guard = _guard(raw.get("memory_guard"), rid)
+    if kind == "wsl" and not guard["enabled"]:
+        raise ConfigError(f"runtime {rid}: the memory guard is mandatory for WSL runtimes (memory_guard.enabled cannot be false)")
     return Runtime(
         id=rid,
         kind=kind,
@@ -229,7 +232,7 @@ def parse_runtime(rid: str, raw) -> Runtime:
         keep_job_dirs=keep,
         require_attention=attn,
         env=dict(env),
-        memory_guard=_guard(raw.get("memory_guard"), rid),
+        memory_guard=guard,
     )
 
 

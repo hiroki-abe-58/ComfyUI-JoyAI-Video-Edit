@@ -55,7 +55,7 @@ def new_dir(rt: Runtime, kind: str) -> tuple[str, Path]:
 
 
 def child(job_dir: Path, name: str) -> Path:
-    if name not in (P.JOB_FILE, P.INPUT_FILE, P.REF_FILE, P.OUTPUT_FILE, P.RESULT_FILE, P.CANCEL_FILE):
+    if name not in (P.JOB_FILE, P.INPUT_FILE, P.OUTPUT_FILE, P.RESULT_FILE, P.CANCEL_FILE):
         raise JobFilesError(f"unexpected job file name {name!r}")
     return job_dir / name
 

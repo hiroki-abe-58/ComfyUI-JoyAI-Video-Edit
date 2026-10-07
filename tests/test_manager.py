@@ -39,18 +39,15 @@ def test_load_edit_reuse_and_exact_transport(manager, make_rt):
     assert manager.state == M.READY
 
 
-def test_portrait_orientation(manager, make_rt):
+@pytest.mark.parametrize("kw", [{"orientation": "portrait"}, {"orientation": "auto"}, {"steps": 3}, {"temporal_ids": 16}])
+def test_unverified_profile_is_refused_before_the_worker(manager, make_rt, kw):
     rt = make_rt()
     manager.load(rt)
-    _, out = edit(manager, rt, frames(3, 96, 72), orientation="portrait")
-    assert out.shape == (3, 840, 480, 3)
-
-
-def test_reference_image_is_transported(manager, make_rt):
-    rt = make_rt()
-    manager.load(rt)
-    res, out = edit(manager, rt, frames(2), reference=frames(1, 80, 64, seed=3))
-    assert out.shape[0] == 2
+    args = {"prompt": "x", "seed": 1, "steps": 2, "temporal_ids": 8, "orientation": "landscape", **kw}
+    with pytest.raises(Exception, match="must be|integer in"):
+        manager.edit(rt, frames(2), **args)
+    assert manager.state == M.READY
+    assert edit(manager, rt, frames(2))[1].shape == (2, 480, 840, 3)
 
 
 def test_edit_without_load_is_refused(manager, make_rt):
@@ -277,7 +274,6 @@ def test_missing_distro_is_named(manager, make_rt, monkeypatch):
         "vae_ckpt": "/b",
         "text_encoder_ckpt": "/c",
         "cache_dir": "/e",
-        "memory_guard": {"enabled": False},
     }
     rt = config.parse_runtime("r", raw)
     monkeypatch.setattr(M, "_wsl_list", lambda rt, *flags: {"JoyAI-Ubuntu", "Other"})
