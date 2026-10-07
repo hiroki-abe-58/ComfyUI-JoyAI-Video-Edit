@@ -1,0 +1,14 @@
+# Excluded from the Comfy Registry package (on top of .gitignore).
+tests/
+.github/
+.gitignore
+.comfyignore
+.gitattributes
+scripts/
+*.pt
+*.pth
+*.safetensors
+*.u8
+*.mp4
+__pycache__/
+joyai.runtimes.json

@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+_comfyui/
+# never commit model files, frames, outputs, local configs or logs
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.ckpt
+*.onnx
+*.u8
+*.mp4
+*.mov
+*.mkv
+output/
+outputs/
+logs/
+*.log
+joyai.runtimes.json

@@ -1,0 +1,19 @@
+{
+ "schema_version": 1,
+ "runtimes": {
+  "joyai-rtx5090": {
+   "description": "JoyAI-Video-Edit 0811, RTX 5090 profile (840x480, SageAttention, FP8), dedicated WSL2 distro",
+   "kind": "wsl",
+   "distro": "<WSL distro name>",
+   "user": "root",
+   "python": "/opt/joyai/env/bin/python",
+   "deploy_dir": "/opt/joyai/upstream/deploy",
+   "dit_ckpt": "/opt/joyai/deps/checkpoints/JoyAI-Video-Edit/dit/joyai_video_edit_dit_0811.pth",
+   "vae_ckpt": "/opt/joyai/deps/checkpoints/JoyAI-Video-Edit/vae",
+   "text_encoder_ckpt": "/opt/joyai/deps/checkpoints/MiMo-VL-7B-RL-2508",
+   "cache_dir": "/opt/joyai/cache_rtx5090",
+   "load_timeout_s": 1800,
+   "memory_guard": {"max_commit_pct": 95, "margin_gib": 2}
+  }
+ }
+}

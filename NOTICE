@@ -1,0 +1,18 @@
+ComfyUI-JoyAI-Video-Edit
+Copyright 2026 hiroki-abe-58
+
+This product is an unofficial community integration. It is not affiliated with or endorsed by JD.com /
+jd-opensource (JoyAI-Video-Edit), Xiaomi (MiMo-VL), NVIDIA, the SageAttention authors or Comfy Org.
+
+This repository contains no model weights and no upstream source files, and it downloads nothing at run time.
+At run time the worker imports an unmodified checkout of jd-opensource/JoyAI-Video-Edit (Apache License 2.0) that
+the administrator installs separately, with its build dependencies (joyomni_ops, SageAttention - Apache License
+2.0; CUTLASS - BSD-3-Clause), and loads weights the administrator downloads: jdopensource/JoyAI-Video-Edit
+(Apache License 2.0) and XiaomiMiMo/MiMo-VL-7B-RL-2508 (MIT License). See docs/SETUP.md.
+
+runtime/joyai_lowram/ replaces only how upstream's DiT and text-encoder weights are placed in memory (the same
+checkpoints, parameters, dtypes and FP8 recipe; see the module docstrings). Results of this pack are compared with
+that patched reference, not with an unmodified official run.
+
+The process-control, configuration and kill-helper code is adapted from ComfyUI-MonarchRT and ComfyUI-LeapTalk
+(https://github.com/hiroki-abe-58), Copyright 2026 hiroki-abe-58, Apache License 2.0.
