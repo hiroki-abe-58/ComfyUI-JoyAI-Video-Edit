@@ -152,22 +152,39 @@ def child_env(rt: Runtime) -> dict[str, str]:
     return env
 
 
-def distro_running(rt: Runtime) -> bool:
-    """True if the configured distro is running (never starts it). Non-WSL runtimes: True."""
-    if rt.kind != "wsl":
-        return True
+def _decode_wsl(raw: bytes) -> str:
+    """wsl.exe writes its own messages as UTF-16; Linux output is UTF-8."""
+    return raw.decode("utf-16-le", "replace") if raw.count(b"\x00") > len(raw) // 4 else raw.decode("utf-8", "replace")
+
+
+def _wsl_list(rt: Runtime, *flags: str) -> set[str] | None:
+    """Distro names from `wsl.exe -l -q [flags]` (read-only; never starts a distro). None if unknown."""
     try:
         out = subprocess.run(
-            [_wsl_exe(), "-l", "--running", "-q"],
+            [_wsl_exe(), "-l", *flags, "-q"],
             capture_output=True,
             timeout=30,
             env=child_env(rt),  # noqa: S603
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired):
-        return True  # unknown: let the caller try (the helper itself refuses anything foreign)
-    text = out.stdout.decode("utf-16-le", "replace") if b"\x00" in out.stdout else out.stdout.decode("utf-8", "replace")
-    return rt.distro in {line.strip().strip("\ufeff") for line in text.splitlines()}
+        return None
+    return {line.strip().strip("\ufeff") for line in _decode_wsl(out.stdout).splitlines() if line.strip()}
+
+
+def distro_running(rt: Runtime) -> bool:
+    """True if the configured distro is running (never starts it). Non-WSL runtimes: True."""
+    if rt.kind != "wsl":
+        return True
+    names = _wsl_list(rt, "--running")
+    return True if names is None else rt.distro in names  # unknown: let the caller try (the helper refuses anything foreign)
+
+
+def distro_installed(rt: Runtime) -> bool:
+    if rt.kind != "wsl":
+        return True
+    names = _wsl_list(rt)
+    return True if names is None else rt.distro in names
 
 
 def run_kill_helper(rt: Runtime, session_dir: Path, grace_s: float = 5.0) -> dict:
@@ -266,7 +283,7 @@ class WorkerProcess:
 
     def log_tail(self, n: int = 1500) -> str:
         try:
-            return redact((self.session_dir / "worker.log").read_bytes()[-n:].decode("utf-8", "replace"))
+            return redact(_decode_wsl((self.session_dir / "worker.log").read_bytes()[-n:]).strip())
         except OSError:
             return ""
 
@@ -415,6 +432,9 @@ class Manager:
                 elif self.state == READY:
                     self._arm_idle()
                     return self.status_dict(live=False)
+            if not distro_installed(rt):
+                self.last_error = f"WSL distro {rt.distro!r} is not installed (see `wsl.exe -l -v`)"
+                raise WorkerError(f"{self.last_error}; check the runtime {rt.id!r} in the JoyAI runtime config")
             self._clean_stale(rt)
             snap = memory.snapshot()
             ok, why = memory.check_admission(snap, rt.memory_guard, rt.memory_guard["expected_worker_gib"], start=True)
@@ -569,7 +589,7 @@ class Manager:
                     raise JobCancelled("cancelled by the user")
                 if time.monotonic() > deadline:
                     self._cancel(w, rid, job_dir)
-                    raise JobTimeout("job timed out")
+                    raise JobTimeout(f"the {n}-frame job exceeded its time limit (job_timeout_base_s + job_timeout_per_frame_s x frames in the runtime config)")
                 if time.monotonic() >= next_mem:
                     next_mem = time.monotonic() + 1.0
                     if watch.update(memory.snapshot()):

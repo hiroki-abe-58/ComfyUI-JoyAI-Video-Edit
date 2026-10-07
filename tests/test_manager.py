@@ -251,3 +251,30 @@ def test_admission_formula():
     assert not ok and "projected commit" in why
     ok, why = memory.check_admission({**snap, "available_gib": 20.0}, g, 57.7, start=True)
     assert not ok and "physical" in why
+
+
+def test_decode_wsl_messages():
+    msg = "There is no distribution with the supplied name.\r\n".encode("utf-16-le")
+    assert "no distribution" in M._decode_wsl(msg)
+    assert M._decode_wsl("plain utf-8 ü".encode()) == "plain utf-8 ü"
+
+
+def test_missing_distro_is_named(manager, make_rt, monkeypatch):
+    from joyai_comfy import config
+
+    raw = {
+        "kind": "wsl",
+        "distro": "NoSuchDistro",
+        "python": "/p",
+        "deploy_dir": "/d",
+        "dit_ckpt": "/a",
+        "vae_ckpt": "/b",
+        "text_encoder_ckpt": "/c",
+        "cache_dir": "/e",
+        "memory_guard": {"enabled": False},
+    }
+    rt = config.parse_runtime("r", raw)
+    monkeypatch.setattr(M, "_wsl_list", lambda rt, *flags: {"JoyAI-Ubuntu", "Other"})
+    with pytest.raises(M.WorkerError, match="'NoSuchDistro' is not installed"):
+        manager.load(rt)
+    assert manager._worker is None

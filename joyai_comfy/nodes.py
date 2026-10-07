@@ -179,7 +179,7 @@ class JoyAIVideoEdit(io.ComfyNode):
         except JobCancelled:
             _raise_interrupt_or("JoyAI job was cancelled")
         except JobTimeout as exc:
-            raise RuntimeError(f"JoyAI job timed out ({redact(exc)})") from None
+            raise RuntimeError(f"JoyAI job timed out: {redact(exc)}") from None
         except (AdmissionRefused, WorkerError) as exc:
             raise RuntimeError(redact(exc)) from None
         images_out = u8_to_images(out)
