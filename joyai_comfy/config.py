@@ -30,14 +30,23 @@ _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 _MEMMAX_RE = re.compile(r"[1-9][0-9]{0,4}[MG]")
 GUARD_DEFAULTS = {
     "enabled": True,
-    "max_commit_pct": 95.0,  # admission: commit now + expected + margin must stay at or below this share of the limit
-    "margin_gib": 2.0,  # the user's operating margin
-    "expected_worker_gib": 57.7,  # 1.05 x 54.98 GiB measured worker start delta (PATCHED_REFERENCE 2026-10-07)
+    "max_commit_pct": 90.0,  # no new large-memory stage (model load or job) if commit now / projected exceeds this share
+    "expected_worker_gib": 65.0,  # commit headroom required for a model load (measured start delta ~62 GiB, 2026-10-07)
+    "margin_gib": 0.0,  # extra operating margin on top of the headroom
     "job_factor": 1.25,  # admission before a job: 1.25 x the per-job estimate
     "min_available_gib": 24.0,  # physical memory available before a worker start (observed min 20.45 while resident)
-    "stop_commit_pct": 95.0,  # running job: stop at >= this for stop_sustain_seconds ...
-    "stop_sustain_seconds": 5.0,
-    "hard_stop_commit_pct": 97.0,  # ... or at >= this once
+    "warn_commit_pct": 85.0,  # warning (logged, shown in status) at or above this share
+    "hard_stop_commit_pct": 95.0,  # a running job is stopped as soon as commit reaches this share
+    "release_timeout_s": 120.0,  # after a worker stops: wait at most this long for the WSL VM to return its memory
+    "release_tolerance_gib": 4.0,  # released = commit back within this of the pre-load commit
+}
+# Bounds the administrator may not cross: the guard can be made stricter, never looser.
+GUARD_BOUNDS = {
+    "max_commit_pct": ("max", 90.0),
+    "hard_stop_commit_pct": ("max", 95.0),
+    "warn_commit_pct": ("max", 85.0),
+    "expected_worker_gib": ("min", 65.0),
+    "release_timeout_s": ("max", 600.0),
 }
 _KEYS = {
     "kind",
@@ -141,10 +150,9 @@ def _guard(raw, rid: str) -> dict:
         elif not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
             raise ConfigError(f"runtime {rid}: memory_guard.{k} must be a non-negative number")
         out[k] = v
-    # never looser than the stop rule: the guard can be made stricter, not weaker
-    for k, cap in (("max_commit_pct", 95.0), ("stop_commit_pct", 95.0), ("hard_stop_commit_pct", 97.0)):
-        if out[k] > cap:
-            raise ConfigError(f"runtime {rid}: memory_guard.{k} may not exceed {cap}")
+    for k, (kind, bound) in GUARD_BOUNDS.items():
+        if (kind == "max" and out[k] > bound) or (kind == "min" and out[k] < bound):
+            raise ConfigError(f"runtime {rid}: memory_guard.{k} may not be {'above' if kind == 'max' else 'below'} {bound}")
     return out
 
 

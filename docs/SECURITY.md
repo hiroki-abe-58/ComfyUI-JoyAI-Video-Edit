@@ -11,8 +11,27 @@
   look like credentials, sets Hugging Face offline mode and empties the prompt-enhancement variables.
 - Process ownership: `wsl.exe` runs in a Job Object with KILL_ON_JOB_CLOSE; the worker leads its own process group,
   exits on stdin EOF, and a kill helper (pid + start time + command line checks) removes leftovers.
-- Memory guard: admission before start and before each job, stop at >= 95 % of the commit limit for 5 s or >= 97 %
-  once; the configuration can make it stricter, never looser.
+- Memory guard (v0): a model load needs commit_now + 65 GiB <= 90 % of the current commit limit; no new load or job at
+  >= 90 %; warning at >= 85 %; a running job is stopped as soon as commit reaches 95 %. After a worker stops, the
+  Loader waits (up to 120 s, shown as "Waiting for WSL memory release") until the commit charge is back near its
+  pre-load level instead of starting a load on residual memory. The configuration can make this stricter, never looser.
 - Messages and reports redact absolute paths and the user name.
 This is isolation of configuration and arguments, not a sandbox: the runtime runs with the rights of the user that
 started ComfyUI (root inside the dedicated distro in the tested setup).
+## Draft note for the release review: the worker runs as root inside a dedicated distro
+Status: accepted for local testing (Stage G); to be re-judged in the release review.
+- Why root today: the tested runtime (Python env, compiled kernels, inductor / Triton caches, checkpoints under
+  `/opt/joyai`) was installed and validated as root; the optional `memory_max` cgroup scope uses the system
+  `systemd-run --scope`, which needs root. The model itself does not need root.
+- Blast radius: root controls the dedicated distro only. Note that any user in a WSL distro - root or not - can read and
+  write the Windows drives mounted under `/mnt/<drive>` and start Windows programs through WSL interop, with the rights
+  of the Windows user who started ComfyUI. Running the worker as a non-root Linux user therefore narrows access inside
+  the distro, not the access to Windows files.
+- What limits exposure: no network listener (stdin/stdout pipes + job files; verified with `ss` while loaded and after a
+  job); a dedicated distro used for nothing else; workflows cannot choose an executable, path, distro or user (admin
+  config only, strict schema); offline mode and credential-like variables dropped; the Windows side owns the process
+  tree (Job Object) and a checked kill helper removes leftovers.
+- Possible non-root route: create a `joyai` user in the distro, give it read access to the checkpoints and write access
+  to the cache folder, set `"user": "joyai"` in the runtime config and leave `memory_max` unset (or use a user systemd
+  instance). Optionally restrict the dedicated distro further in its own `/etc/wsl.conf` (automount / interop) - a
+  distro setting the administrator decides; not tested here.

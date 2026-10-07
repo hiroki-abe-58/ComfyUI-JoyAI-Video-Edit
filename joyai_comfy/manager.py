@@ -55,7 +55,7 @@ CODE_FILES = (
 STATUS_TIMEOUT_S = 10.0
 SESSION_DIRS_KEPT = 5
 
-STOPPED, STARTING, LOADING, READY, RUNNING, CANCELLING, ERROR, STOPPING = (
+STOPPED, STARTING, LOADING, READY, RUNNING, CANCELLING, ERROR, STOPPING, RELEASING = (
     "STOPPED",
     "STARTING",
     "LOADING",
@@ -64,6 +64,7 @@ STOPPED, STARTING, LOADING, READY, RUNNING, CANCELLING, ERROR, STOPPING = (
     "CANCELLING",
     "ERROR",
     "STOPPING",
+    "RELEASING",  # the worker is gone, the WSL VM has not returned its memory yet (typically 20-80 s)
 )
 
 
@@ -80,6 +81,10 @@ class JobTimeout(RuntimeError):
 
 
 class AdmissionRefused(RuntimeError):
+    pass
+
+
+class ReleaseTimeout(AdmissionRefused):
     pass
 
 
@@ -217,6 +222,7 @@ class WorkerProcess:
         self.started_at = time.time()
         self.jobs = 0
         self.stop_report: dict | None = None
+        self.preload_commit: float | None = None  # commit charge right before this worker's model load (release baseline)
 
     def start(self) -> None:
         code = self.session_dir / "code"
@@ -324,6 +330,9 @@ class Manager:
         self._idle_minutes = 0
         self._cleaned_roots: set[str] = set()
         self.job_counter = 0
+        self._release_done = threading.Event()
+        self._release_done.set()
+        self.release: dict = {}  # last release: started, baseline, seconds, released, commit
 
     # -- helpers ----------------------------------------------------------------------------------------
     def _note(self, event: str, **fields) -> None:
@@ -343,9 +352,9 @@ class Manager:
         self._set(STOPPING)
         report = w.stop(reason)
         self.generation += 1
-        self._set(ERROR if error else STOPPED)  # session folder kept for its log; pruned at the next start
         if error:
             self.last_error = reason
+        self._begin_release(w, error)  # session folder kept for its log; pruned at the next start
         self._note(
             "worker_stopped",
             worker_id=w.worker_id,
@@ -355,6 +364,69 @@ class Manager:
             helper=(report.get("kill_helper") or {}).get("status"),
         )
         return report
+
+    def _begin_release(self, w: WorkerProcess, error: bool) -> None:
+        """RELEASING until the commit charge is back near its pre-load level (polled every 2 s, at most
+        release_timeout_s); then STOPPED (or ERROR). A new model load waits for this instead of starting on residual
+        commit."""
+        guard = w.rt.memory_guard
+        final = ERROR if error else STOPPED
+        baseline = getattr(w, "preload_commit", None)
+        self.release = {
+            "started": time.time(),
+            "baseline_gib": baseline,
+            "tolerance_gib": guard["release_tolerance_gib"],
+            "timeout_s": guard["release_timeout_s"],
+            "released": None,
+        }
+        if not guard["enabled"] or baseline is None or memory.released(memory.snapshot(), baseline, guard):
+            self.release.update(released=True, seconds=0.0)
+            self._set(final)
+            self._release_done.set()
+            return
+        self._set(RELEASING)
+        self._release_done.clear()
+        rel = self.release
+
+        def watch() -> None:
+            deadline = time.monotonic() + guard["release_timeout_s"]
+            snap: dict = {}
+            while time.monotonic() < deadline:
+                snap = memory.snapshot()
+                if memory.released(snap, baseline, guard):
+                    rel.update(released=True, seconds=round(time.time() - rel["started"], 1), commit_gib=snap.get("commit_gib"))
+                    break
+                self._release_done.wait(2.0)  # sleeps 2 s (the event is only set by this thread)
+            else:
+                rel.update(released=False, seconds=round(time.time() - rel["started"], 1), commit_gib=snap.get("commit_gib"))
+            if self.state == RELEASING:
+                self._set(final)
+            self._note("memory_released" if rel["released"] else "release_timeout", **{k: v for k, v in rel.items() if k != "started"})
+            self._release_done.set()
+
+        threading.Thread(target=watch, name="joyai-release", daemon=True).start()
+
+    def _wait_release(self, interrupted: Callable[[], bool], notify: Callable[[str], None] | None) -> None:
+        if self._release_done.is_set():
+            return
+        rel = self.release
+        msg = (
+            f"Waiting for WSL memory release (commit back to <= {rel['baseline_gib'] + rel['tolerance_gib']:.1f} GiB expected; up to "
+            f"{rel['timeout_s']:.0f} s after the previous worker stopped)"
+        )
+        self._note("waiting_for_release")
+        if notify:
+            notify(msg)
+        while not self._release_done.wait(0.5):
+            if interrupted():
+                raise JobCancelled("cancelled while waiting for the WSL memory release")
+        if not rel.get("released"):
+            raise ReleaseTimeout(
+                f"WSL memory was not released within {rel['timeout_s']:.0f} s after the previous worker stopped (commit "
+                f"{rel.get('commit_gib')} GiB); a new model load was not started. Retry in a minute, or check what else holds memory."
+            )
+        if notify:
+            notify(f"WSL memory released after {rel.get('seconds')} s")
 
     def _cancel_idle(self) -> None:
         if self._idle_timer is not None:
@@ -418,7 +490,7 @@ class Manager:
                 raise WorkerError(f"worker exited while {phase}: {w.log_tail()}")
         raise JobTimeout(f"worker did not finish {phase} within {timeout_s:.0f} s")
 
-    def load(self, rt: Runtime, *, idle_minutes: int = 0, interrupted: Callable[[], bool] = lambda: False) -> dict:
+    def load(self, rt: Runtime, *, idle_minutes: int = 0, interrupted: Callable[[], bool] = lambda: False, notify: Callable[[str], None] | None = None) -> dict:
         with self._lock:
             self._idle_minutes = int(idle_minutes)
             ident = identity(rt)
@@ -435,14 +507,16 @@ class Manager:
             if not distro_installed(rt):
                 self.last_error = f"WSL distro {rt.distro!r} is not installed (see `wsl.exe -l -v`)"
                 raise WorkerError(f"{self.last_error}; check the runtime {rt.id!r} in the JoyAI runtime config")
+            self._wait_release(interrupted, notify)  # never start a model load on residual commit of the previous worker
             self._clean_stale(rt)
             snap = memory.snapshot()
             ok, why = memory.check_admission(snap, rt.memory_guard, rt.memory_guard["expected_worker_gib"], start=True)
-            self._note("admission_start", ok=ok, commit_gib=snap.get("commit_gib"), limit_gib=snap.get("commit_limit_gib"))
+            self._note("admission_start", ok=ok, commit_gib=snap.get("commit_gib"), limit_gib=snap.get("commit_limit_gib"), detail=why)
             if not ok:
                 self.last_error = why
                 raise AdmissionRefused(why)
             w = WorkerProcess(rt, ident)
+            w.preload_commit = snap.get("commit_gib")
             self._worker = w
             self._set(STARTING)
             self._note("worker_starting", worker_id=w.worker_id, runtime_id=rt.id)
@@ -557,6 +631,7 @@ class Manager:
 
     def _follow(self, w: WorkerProcess, rid: str, n: int, on_progress, interrupted, deadline: float, job_dir: Path) -> None:
         watch = memory.PressureWatch(w.rt.memory_guard)
+        warned = False
         next_mem = 0.0
         try:
             while True:
@@ -592,7 +667,11 @@ class Manager:
                     raise JobTimeout(f"the {n}-frame job exceeded its time limit (job_timeout_base_s + job_timeout_per_frame_s x frames in the runtime config)")
                 if time.monotonic() >= next_mem:
                     next_mem = time.monotonic() + 1.0
-                    if watch.update(memory.snapshot()):
+                    stop = watch.update(memory.snapshot())
+                    if watch.warned and not warned:
+                        warned = True
+                        self._note("memory_warning", commit_pct=round(watch.peak_pct, 1), warn_pct=w.rt.memory_guard["warn_commit_pct"])
+                    if stop:
                         self._note("memory_stop", reason=watch.reason)
                         self._cancel(w, rid, job_dir)
                         raise AdmissionRefused(f"memory guard stopped the job: {watch.reason}")
@@ -646,6 +725,8 @@ class Manager:
         with self._lock:
             w = self._worker
             out: dict = {"state": self.state, "generation": self.generation, "last_error": self.last_error, "events": list(self.events)[-12:]}
+            if self.release:
+                out["release"] = {k: v for k, v in self.release.items() if k != "started"}
             if w is None:
                 out["worker"] = None
                 return out

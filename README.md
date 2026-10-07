@@ -21,6 +21,10 @@ therefore compared with that patched reference, not with an unmodified official 
 
 Setup: docs/SETUP.md. Security notes: docs/SECURITY.md. Tests: docs/TESTING.md.
 
+Draft notes (to be settled in the release review): the worker runs as root inside a dedicated WSL2 distribution and
+opens no network port (see docs/SECURITY.md); a model load needs about 65 GiB of free commit headroom on Windows
+(see docs/LIMITS.md); outputs are not bitwise repeatable.
+
 ## License
 Apache License 2.0 for this repository's code (see LICENSE and NOTICE). Model weights and upstream code are not
 included and keep their own licenses.

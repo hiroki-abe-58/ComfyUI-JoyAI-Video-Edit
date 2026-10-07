@@ -3,11 +3,11 @@
 On the machine this was measured on, CUDA allocations of the WSL2 worker counted against the Windows commit charge
 almost 1:1, and the commit limit follows the automatic pagefile (it changes) - so the limit is read at every check,
 never cached. A value that cannot be measured is "unknown" and is never treated as unlimited: admission refuses.
-Rules (never loosened by configuration, see config.GUARD_DEFAULTS):
-- admission before a worker start: commit_now + expected_worker + margin <= max_commit_pct of the current limit,
-  and physical available >= min_available_gib;
-- admission before a job: commit_now + job_factor x job estimate + margin <= max_commit_pct of the current limit;
-- while a job runs: stop at >= stop_commit_pct for stop_sustain_seconds, or at >= hard_stop_commit_pct once.
+Rules (v0; never loosened by configuration, see config.GUARD_DEFAULTS / GUARD_BOUNDS):
+- model load: commit_now + 65 GiB (expected_worker_gib) + margin <= 90 % of the current limit, commit_now itself below
+  90 %, and physical available >= min_available_gib;
+- job on a loaded worker: commit_now + job_factor x job estimate + margin <= 90 % of the current limit;
+- warning (status / log) at >= 85 %; a running job is stopped as soon as commit reaches 95 %.
 """
 
 from __future__ import annotations
@@ -90,10 +90,10 @@ def job_estimate_gib(frames: int, in_h: int, in_w: int, out_h: int, out_w: int) 
 
 
 def check_admission(snap: dict, guard: dict, add_gib: float, *, start: bool) -> tuple[bool, str]:
-    """May a worker start (``start=True``) or a job begin, adding about ``add_gib`` of commit?"""
+    """May a model load (``start=True``) or a job begin, adding about ``add_gib`` of commit?"""
     if not guard["enabled"]:
         return True, "memory guard disabled by the runtime config"
-    what = "start the JoyAI runtime" if start else "start the job"
+    what = "load the JoyAI model" if start else "start the job"
     if not snap.get("measurable"):
         return False, f"memory guard: cannot measure the commit charge; refusing to {what}"
     if not snap.get("commit_enforced"):
@@ -102,27 +102,45 @@ def check_admission(snap: dict, guard: dict, add_gib: float, *, start: bool) -> 
             return False, f"memory guard: only {snap['available_gib']:.1f} GiB available (needs {need:.1f} GiB to {what})"
         return True, f"ok: available {snap['available_gib']:.1f} GiB (commit not enforced on this system)"
     limit = snap["commit_limit_gib"]
-    projected = snap["commit_gib"] + add_gib + guard["margin_gib"]
     cap = guard["max_commit_pct"] / 100.0 * limit
+    projected = snap["commit_gib"] + add_gib + guard["margin_gib"]
+    if snap["commit_gib"] >= cap:
+        return False, (
+            f"memory guard: commit is already {100.0 * snap['commit_gib'] / limit:.1f} % of the current limit {limit:.1f} GiB "
+            f"(no new large-memory stage at >= {guard['max_commit_pct']:.0f} %)"
+        )
     if projected > cap:
         return False, (
-            f"memory guard: projected commit {projected:.1f} GiB ({snap['commit_gib']:.1f} now + {add_gib:.1f} + "
-            f"{guard['margin_gib']:.1f} margin) > {guard['max_commit_pct']:.0f} % of the current limit {limit:.1f} GiB "
-            f"({cap:.1f} GiB) - close other GPU/RAM users and retry"
+            f"memory guard: {what} needs {add_gib + guard['margin_gib']:.1f} GiB of commit headroom; {snap['commit_gib']:.1f} GiB now "
+            f"-> {projected:.1f} GiB > {guard['max_commit_pct']:.0f} % of the current limit {limit:.1f} GiB ({cap:.1f} GiB). "
+            "Close other GPU/RAM users and retry"
         )
     if start and snap["available_gib"] < guard["min_available_gib"]:
         return False, f"memory guard: only {snap['available_gib']:.1f} GiB physical memory available (needs {guard['min_available_gib']:.1f} GiB)"
-    return True, f"ok: projected {projected:.1f} GiB <= {cap:.1f} GiB ({guard['max_commit_pct']:.0f} % of {limit:.1f} GiB)"
+    note = " (warning: at or above the warning level)" if 100.0 * projected / limit >= guard["warn_commit_pct"] else ""
+    return True, f"ok: projected {projected:.1f} GiB <= {cap:.1f} GiB ({guard['max_commit_pct']:.0f} % of {limit:.1f} GiB){note}"
+
+
+def released(snap: dict, baseline_gib: float | None, guard: dict) -> bool:
+    """After a worker stopped: has the commit charge come back (to the pre-load level + tolerance)? Unknown -> no."""
+    if not snap.get("measurable"):
+        return False
+    if not snap.get("commit_enforced"):
+        return True
+    if baseline_gib is None:
+        return True
+    return snap["commit_gib"] <= baseline_gib + guard["release_tolerance_gib"]
 
 
 @dataclass
 class PressureWatch:
-    """True once commit stayed >= stop_commit_pct for stop_sustain_seconds, or reached hard_stop_commit_pct once.
-    Unmeasurable counts as high."""
+    """Stop a running job as soon as commit reaches hard_stop_commit_pct (or memory became unmeasurable for 5 s);
+    remember whether the warning level was crossed."""
 
     guard: dict
-    since: float | None = None
+    since_unknown: float | None = None
     peak_pct: float = 0.0
+    warned: bool = False
     last: dict = field(default_factory=dict)
     reason: str = ""
 
@@ -131,21 +149,19 @@ class PressureWatch:
         if not self.guard["enabled"]:
             return False
         now = snap.get("t", time.monotonic())
-        if snap.get("measurable"):
-            pct = snap["commit_pct"] if snap.get("commit_enforced") else 0.0
-            self.peak_pct = max(self.peak_pct, pct)
-            if pct >= self.guard["hard_stop_commit_pct"]:
-                self.reason = f"commit reached {pct:.1f} % (hard stop {self.guard['hard_stop_commit_pct']:.0f} %)"
+        if not snap.get("measurable"):
+            if self.since_unknown is None:
+                self.since_unknown = now
+            if now - self.since_unknown >= 5.0:
+                self.reason = "commit charge could not be measured for 5 s"
                 return True
-            high = pct >= self.guard["stop_commit_pct"]
-        else:
-            high = True
-        if not high:
-            self.since = None
             return False
-        if self.since is None:
-            self.since = now
-        if now - self.since >= self.guard["stop_sustain_seconds"]:
-            self.reason = f"commit stayed at or above {self.guard['stop_commit_pct']:.0f} % for {self.guard['stop_sustain_seconds']:.0f} s"
+        self.since_unknown = None
+        pct = snap["commit_pct"] if snap.get("commit_enforced") else 0.0
+        self.peak_pct = max(self.peak_pct, pct)
+        if pct >= self.guard["warn_commit_pct"]:
+            self.warned = True
+        if pct >= self.guard["hard_stop_commit_pct"]:
+            self.reason = f"commit reached {pct:.1f} % (hard stop at {self.guard['hard_stop_commit_pct']:.0f} %)"
             return True
         return False

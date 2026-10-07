@@ -29,7 +29,8 @@ def test_valid_wsl_runtime_defaults():
     rt = config.parse_runtime("joyai-5090", wsl_raw())
     assert rt.kind == "wsl" and rt.distro == "JoyAI-Ubuntu" and rt.user == "root"
     assert (rt.width, rt.height) == (840, 480) and rt.max_frames == 600
-    assert rt.memory_guard["max_commit_pct"] == 95.0 and rt.memory_guard["hard_stop_commit_pct"] == 97.0
+    assert rt.memory_guard["max_commit_pct"] == 90.0 and rt.memory_guard["hard_stop_commit_pct"] == 95.0
+    assert rt.memory_guard["expected_worker_gib"] == 65.0 and rt.memory_guard["warn_commit_pct"] == 85.0
     assert rt.require_attention == "sage" and rt.engine == "joyai" and not rt.keep_job_dirs
 
 
@@ -53,8 +54,10 @@ def test_valid_wsl_runtime_defaults():
         ({"max_frames": True}, "max_frames"),
         ({"keep_job_dirs": "yes"}, "keep_job_dirs"),
         ({"require_attention": "fa4"}, "require_attention"),
-        ({"memory_guard": {"max_commit_pct": 99}}, "may not exceed"),
-        ({"memory_guard": {"hard_stop_commit_pct": 98}}, "may not exceed"),
+        ({"memory_guard": {"max_commit_pct": 95}}, "may not be above 90"),
+        ({"memory_guard": {"hard_stop_commit_pct": 97}}, "may not be above 95"),
+        ({"memory_guard": {"expected_worker_gib": 57.7}}, "may not be below 65"),
+        ({"memory_guard": {"warn_commit_pct": 88}}, "may not be above 85"),
         ({"memory_guard": {"bogus": 1}}, "memory_guard may only set"),
         ({"jobs_dir": "relative/jobs"}, "jobs_dir"),
     ],
@@ -76,9 +79,9 @@ def test_distro_only_for_wsl(tmp_path):
 
 
 def test_guard_can_be_made_stricter_not_looser():
-    rt = config.parse_runtime("rt", wsl_raw(memory_guard={"max_commit_pct": 90, "margin_gib": 4}))
-    assert rt.memory_guard["max_commit_pct"] == 90 and rt.memory_guard["margin_gib"] == 4
-    assert rt.memory_guard["stop_commit_pct"] == 95.0  # untouched keys keep their defaults
+    rt = config.parse_runtime("rt", wsl_raw(memory_guard={"max_commit_pct": 85, "margin_gib": 4, "expected_worker_gib": 70}))
+    assert rt.memory_guard["max_commit_pct"] == 85 and rt.memory_guard["margin_gib"] == 4 and rt.memory_guard["expected_worker_gib"] == 70
+    assert rt.memory_guard["hard_stop_commit_pct"] == 95.0  # untouched keys keep their defaults
 
 
 def test_size_is_normalised_to_long_short():

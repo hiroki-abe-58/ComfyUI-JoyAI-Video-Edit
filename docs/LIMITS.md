@@ -13,8 +13,10 @@
   reference differs from itself, but a pre-registered strict rule (cross pairs within the range of two self pairs)
   was not met for 2 of 3 test cases. No parity claim beyond that is made.
 - Memory (Windows commit charge, 64 GB RAM + automatic pagefile): a loaded worker plus ComfyUI peaked at about
-  85.6 GiB of commit (84 % of the limit at the time). After the worker stops, the WSL2 VM keeps 25-30 GiB committed
-  until it stops by itself (20-80 s); a new start in that window is refused by the memory guard - wait and retry.
+  85.6 GiB of commit (84 % of the limit at the time); a model load added up to ~62 GiB. The v0 guard therefore asks
+  for commit_now + 65 GiB <= 90 % of the current commit limit before a load (on the test machine: at most ~21-26 GiB
+  committed before loading, depending on the limit). After the worker stops, the WSL2 VM keeps 25-30 GiB committed
+  until it stops by itself (20-80 s); the Loader shows "Waiting for WSL memory release" and waits up to 120 s.
 - First start compiles kernels (about 14 min without a cache); later starts load in about 80 s.
 - Cancelling during the model load or the first-frame initialisation takes effect only after that step (or by
   stopping the worker).

@@ -9,7 +9,7 @@ from comfy_api.latest import ComfyExtension, io
 
 from . import config, memory
 from . import protocol as P
-from .manager import MANAGER, AdmissionRefused, JobCancelled, JobTimeout, WorkerError
+from .manager import MANAGER, AdmissionRefused, JobCancelled, JobTimeout, ReleaseTimeout, WorkerError
 from .redact import redact
 from .validate import InputError, images_to_u8, orientation_for, u8_to_images, validate_images, validate_prompt
 
@@ -44,6 +44,24 @@ def _interrupted() -> bool:
     return mm.processing_interrupted()
 
 
+def _notifier(node_id):
+    """Show a status line on the node (e.g. while waiting for the WSL memory release); also logged."""
+
+    def notify(text: str) -> None:
+        import logging
+
+        logging.info("[JoyAI] %s", text)
+        try:
+            from server import PromptServer
+
+            if node_id is not None and PromptServer.instance is not None:
+                PromptServer.instance.send_progress_text(text, node_id)
+        except Exception:  # noqa: BLE001 - status text is best effort
+            pass
+
+    return notify
+
+
 def _raise_interrupt_or(msg: str):
     import comfy.model_management as mm
 
@@ -75,6 +93,7 @@ class JoyAIRuntimeLoader(io.ComfyNode):
                 ),
             ],
             outputs=[JoyAIRuntime.Output(display_name="runtime"), io.String.Output(display_name="status")],
+            hidden=[io.Hidden.unique_id],
         )
 
     @classmethod
@@ -86,9 +105,13 @@ class JoyAIRuntimeLoader(io.ComfyNode):
     def execute(cls, runtime, idle_unload_minutes) -> io.NodeOutput:
         rt = _get_runtime(runtime)
         try:
-            status = MANAGER.load(rt, idle_minutes=int(idle_unload_minutes), interrupted=_interrupted)
+            status = MANAGER.load(
+                rt, idle_minutes=int(idle_unload_minutes), interrupted=_interrupted, notify=_notifier(getattr(getattr(cls, "hidden", None), "unique_id", None))
+            )
         except JobCancelled:
             _raise_interrupt_or("JoyAI runtime start was cancelled")
+        except ReleaseTimeout as exc:
+            raise RuntimeError(f"Waiting for WSL memory release timed out: {redact(exc)}") from None
         except (AdmissionRefused, WorkerError, JobTimeout) as exc:
             raise RuntimeError(redact(exc)) from None
         snap = memory.snapshot()

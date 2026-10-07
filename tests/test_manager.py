@@ -175,22 +175,22 @@ def test_concurrent_edits_are_serialised(manager, make_rt):
     assert sorted(results) == [1, 2, 3]
 
 
+def snap_of(state):
+    return lambda: {
+        "measurable": True,
+        "commit_enforced": True,
+        "commit_gib": state["commit"],
+        "commit_limit_gib": 100.0,
+        "commit_pct": state["commit"],
+        "available_gib": 40.0,
+        "t": time.monotonic(),
+    }
+
+
 def test_admission_refuses_start(manager, make_rt, monkeypatch):
     rt = make_rt(memory_guard={"enabled": True})
-    monkeypatch.setattr(
-        memory,
-        "snapshot",
-        lambda: {
-            "measurable": True,
-            "commit_enforced": True,
-            "commit_gib": 50.0,
-            "commit_limit_gib": 100.0,
-            "commit_pct": 50.0,
-            "available_gib": 40.0,
-            "t": time.monotonic(),
-        },
-    )
-    with pytest.raises(M.AdmissionRefused, match="projected commit"):
+    monkeypatch.setattr(memory, "snapshot", snap_of({"commit": 26.0}))  # 26 + 65 = 91 > 90 % of 100
+    with pytest.raises(M.AdmissionRefused, match="needs 65.0 GiB of commit headroom"):
         manager.load(rt)
     assert manager._worker is None
 
@@ -202,55 +202,61 @@ def test_admission_refuses_unmeasurable(manager, make_rt, monkeypatch):
         manager.load(rt)
 
 
-def test_memory_pressure_stops_a_job(manager, make_rt, monkeypatch):
-    rt = make_rt(memory_guard={"enabled": True, "expected_worker_gib": 1.0, "min_available_gib": 0.0})
-    state = {"pct": 50.0}
-    monkeypatch.setattr(
-        memory,
-        "snapshot",
-        lambda: {
-            "measurable": True,
-            "commit_enforced": True,
-            "commit_gib": state["pct"],
-            "commit_limit_gib": 100.0,
-            "commit_pct": state["pct"],
-            "available_gib": 40.0,
-            "t": time.monotonic(),
-        },
-    )
+def test_memory_pressure_stops_a_job_at_95(manager, make_rt, monkeypatch):
+    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    state = {"commit": 20.0}
+    monkeypatch.setattr(memory, "snapshot", snap_of(state))
     manager.load(rt)
 
     def on_progress(done, total):
         if done >= 8:
-            state["pct"] = 97.5  # hard stop at >= 97 % once
+            state["commit"] = 95.0  # hard stop as soon as 95 % is reached
 
     with pytest.raises(M.AdmissionRefused, match="memory guard stopped"):
         edit(manager, rt, frames(64), prompt="[fake:slow] x", on_progress=on_progress)
     assert manager.state == M.READY
 
 
+def test_warning_is_logged_once(manager, make_rt, monkeypatch):
+    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    state = {"commit": 20.0}
+    monkeypatch.setattr(memory, "snapshot", snap_of(state))
+    manager.load(rt)
+
+    def on_progress(done, total):
+        state["commit"] = 86.0
+
+    edit(manager, rt, frames(40), prompt="[fake:slow] x", on_progress=on_progress)
+    assert sum(1 for e in manager.events if e["event"] == "memory_warning") == 1
+
+
 def test_pressure_watch_rules():
-    g = {"enabled": True, "stop_commit_pct": 95.0, "stop_sustain_seconds": 5.0, "hard_stop_commit_pct": 97.0}
-    w = memory.PressureWatch(g)
+    g = {"enabled": True, "warn_commit_pct": 85.0, "hard_stop_commit_pct": 95.0}
     s = lambda pct, t: {"measurable": True, "commit_enforced": True, "commit_pct": pct, "t": t}  # noqa: E731
-    assert not w.update(s(95.5, 0.0)) and not w.update(s(96.0, 4.9))
-    assert not w.update(s(94.0, 5.0))  # dropped below: timer restarts
-    assert not w.update(s(95.0, 6.0)) and w.update(s(95.0, 11.0))
-    w2 = memory.PressureWatch(g)
-    assert w2.update(s(97.0, 0.0))
+    w = memory.PressureWatch(g)
+    assert not w.update(s(80.0, 0.0)) and not w.warned
+    assert not w.update(s(85.0, 1.0)) and w.warned
+    assert not w.update(s(94.9, 2.0))
+    assert w.update(s(95.0, 3.0)) and "hard stop" in w.reason
     w3 = memory.PressureWatch(g)
     assert not w3.update({"measurable": False, "t": 0.0}) and w3.update({"measurable": False, "t": 5.0})
 
 
-def test_admission_formula():
-    g = {"enabled": True, "max_commit_pct": 95.0, "margin_gib": 2.0, "min_available_gib": 24.0}
-    snap = {"measurable": True, "commit_enforced": True, "commit_gib": 20.35, "commit_limit_gib": 101.391, "available_gib": 47.2}
-    ok, why = memory.check_admission(snap, g, 57.7, start=True)
-    assert ok, why  # 20.35 + 57.7 + 2 = 80.05 <= 96.32
-    ok, why = memory.check_admission({**snap, "commit_gib": 40.0}, g, 57.7, start=True)
-    assert not ok and "projected commit" in why
-    ok, why = memory.check_admission({**snap, "available_gib": 20.0}, g, 57.7, start=True)
+def test_admission_formula_v0():
+    g = dict(__import__("joyai_comfy.config", fromlist=["x"]).GUARD_DEFAULTS)
+    snap = {"measurable": True, "commit_enforced": True, "commit_gib": 22.79, "commit_limit_gib": 101.391, "available_gib": 46.0}
+    ok, why = memory.check_admission(snap, g, g["expected_worker_gib"], start=True)
+    assert ok, why  # 22.79 + 65 = 87.79 <= 91.25 (90 % of 101.391)
+    ok, why = memory.check_admission({**snap, "commit_gib": 26.3}, g, 65.0, start=True)
+    assert not ok and "91.3 GiB" in why  # 26.3 + 65 = 91.3 > 91.25
+    ok, why = memory.check_admission({**snap, "commit_gib": 91.3}, g, 0.1, start=False)
+    assert not ok and "no new large-memory stage" in why
+    ok, why = memory.check_admission({**snap, "available_gib": 20.0}, g, 65.0, start=True)
     assert not ok and "physical" in why
+    ok, why = memory.check_admission({**snap, "commit_gib": 22.0}, g, 65.0, start=True)
+    assert ok and "warning" in why  # 87 GiB projected = 85.8 % of the limit
+    ok, why = memory.check_admission({**snap, "commit_gib": 15.0}, g, 65.0, start=True)
+    assert ok and "warning" not in why  # 80 GiB = 78.9 %
 
 
 def test_decode_wsl_messages():
@@ -278,3 +284,54 @@ def test_missing_distro_is_named(manager, make_rt, monkeypatch):
     with pytest.raises(M.WorkerError, match="'NoSuchDistro' is not installed"):
         manager.load(rt)
     assert manager._worker is None
+
+
+def test_unload_enters_releasing_and_load_waits(manager, make_rt, monkeypatch):
+    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    state = {"commit": 20.0}
+    monkeypatch.setattr(memory, "snapshot", snap_of(state))
+    manager.load(rt)
+    state["commit"] = 50.0  # the VM still holds memory after the worker stopped
+    manager.unload()
+    assert manager.state == M.RELEASING and manager.status_dict()["release"]["baseline_gib"] == 20.0
+    notes = []
+    threading.Timer(3.0, lambda: state.update(commit=21.0)).start()
+    t0 = time.time()
+    st = manager.load(rt, notify=notes.append)
+    assert st["state"] == M.READY and time.time() - t0 >= 2.5
+    assert notes and notes[0].startswith("Waiting for WSL memory release") and "released" in notes[-1]
+    assert any(e["event"] == "memory_released" for e in manager.events)
+
+
+def test_release_timeout_refuses_load(manager, make_rt, monkeypatch):
+    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0, "release_timeout_s": 3.0})
+    state = {"commit": 20.0}
+    monkeypatch.setattr(memory, "snapshot", snap_of(state))
+    manager.load(rt)
+    state["commit"] = 50.0
+    manager.unload()
+    with pytest.raises(M.ReleaseTimeout, match="not released within 3 s"):
+        manager.load(rt)
+    assert manager._worker is None and manager.state == M.STOPPED
+    assert any(e["event"] == "release_timeout" for e in manager.events)
+
+
+def test_release_wait_is_interruptible(manager, make_rt, monkeypatch):
+    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    state = {"commit": 20.0}
+    monkeypatch.setattr(memory, "snapshot", snap_of(state))
+    manager.load(rt)
+    state["commit"] = 50.0
+    manager.unload()
+    t0 = time.time()
+    with pytest.raises(M.JobCancelled):
+        manager.load(rt, interrupted=lambda: time.time() - t0 > 1.0)
+    assert time.time() - t0 < 5
+
+
+def test_quick_release_goes_straight_to_stopped(manager, make_rt, monkeypatch):
+    rt = make_rt(memory_guard={"enabled": True, "min_available_gib": 0.0})
+    monkeypatch.setattr(memory, "snapshot", snap_of({"commit": 20.0}))
+    manager.load(rt)
+    manager.unload()
+    assert manager.state == M.STOPPED and manager.release["released"] is True
