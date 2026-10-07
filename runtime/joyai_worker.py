@@ -199,6 +199,7 @@ class Worker:
         self.busy_with: str | None = None
         self.cancel_target: str | None = None
         self.job_dir: Path | None = None
+        self.frames_done = 0
         self.seen_ids: set[str] = set()
         self.started = time.time()
         self.load_seconds = None
@@ -331,6 +332,10 @@ class Worker:
                 st["engine_status_error"] = type(exc).__name__
         return st
 
+    def _progress(self, rid: str, done: int, total: int, chunks: int) -> None:
+        self.frames_done = done
+        self.proto.send("progress", request_id=rid, frames_done=done, frames_total=total, chunks_done=chunks)
+
     def should_cancel(self) -> bool:
         if self.cancel_target is not None and self.cancel_target == self.busy_with:
             return True
@@ -398,6 +403,7 @@ class Worker:
             if (job_dir / P.OUTPUT_FILE).exists() or (job_dir / P.RESULT_FILE).exists():
                 raise JobError("job already has outputs")
             self.job_dir = job_dir
+            self.frames_done = 0
             frames = self._read_frames(job_dir / P.INPUT_FILE, job["frames"], job["height"], job["width"], job["input_sha256"])
             ref = None
             if job["reference"] is not None:
@@ -410,7 +416,7 @@ class Worker:
                 frames,
                 ref,
                 should_cancel=self.should_cancel,
-                on_progress=lambda done, chunks: self.proto.send("progress", request_id=rid, frames_done=done, frames_total=job["frames"], chunks_done=chunks),
+                on_progress=lambda done, chunks: self._progress(rid, done, job["frames"], chunks),
             )
             if self.should_cancel():
                 raise P.JobCancelled()
@@ -454,12 +460,21 @@ class Worker:
                         (self.job_dir / name).unlink()
                     except OSError:
                         pass
-            self.proto.send("cancelled", request_id=rid, job_id=job_id, **(self.engine.memory_info() if self.engine else {}))
+            self.proto.send(
+                "cancelled",
+                request_id=rid,
+                job_id=job_id,
+                frames_done=self.frames_done,
+                seconds=round(time.time() - t0, 3),
+                **(self.engine.memory_info() if self.engine else {}),
+            )
         except Exception as exc:
             self.jobs_failed += 1
             traceback.print_exc(file=sys.stderr)
             fatal = bool(getattr(exc, "fatal", False)) or "CUDA" in str(exc) or "cuda" in type(exc).__module__.lower()
-            self.proto.send("error", request_id=rid, job_id=job_id, error_type=type(exc).__name__, error=str(exc)[:2000], fatal=fatal)
+            self.proto.send(
+                "error", request_id=rid, job_id=job_id, error_type=type(exc).__name__, error=str(exc)[:2000], fatal=fatal, frames_done=self.frames_done
+            )
             if fatal:
                 raise
         finally:

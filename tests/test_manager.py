@@ -89,7 +89,8 @@ def test_cancel_mid_job_then_next_job_works(manager, make_rt):
     assert manager.state == M.READY and 16 <= progress[-1] < 64
     _, out = edit(manager, rt, frames(4))
     assert out.shape[0] == 4
-    assert any(e["event"] == "job_cancelled" and e["clean"] for e in manager.events)
+    ev = [e for e in manager.events if e["event"] == "job_cancelled"][-1]
+    assert ev["clean"] and 16 <= ev["frames_done"] < 64 and ev["worker_seconds"] > 0
 
 
 def test_cancel_not_confirmed_stops_the_worker(manager, make_rt):

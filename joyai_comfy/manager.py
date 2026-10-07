@@ -16,6 +16,7 @@ from __future__ import annotations
 import atexit
 import hashlib
 import json
+import logging
 import os
 import queue
 import shutil
@@ -309,7 +310,9 @@ class Manager:
 
     # -- helpers ----------------------------------------------------------------------------------------
     def _note(self, event: str, **fields) -> None:
-        self.events.append({"t": round(time.time(), 1), "event": event, "state": self.state, **fields})
+        ev = {"t": round(time.time(), 1), "event": event, "state": self.state, **fields}
+        self.events.append(ev)
+        logging.info("[JoyAI] %s", json.dumps(ev, default=str))  # lifecycle only: no prompts, no paths
 
     def _set(self, state: str) -> None:
         self.state = state
@@ -602,7 +605,13 @@ class Manager:
                     break
                 continue
             if msg.get("request_id") == rid and msg.get("type") in ("cancelled", "result", "error"):
-                self._note("job_cancelled", clean=msg.get("type") == "cancelled", cuda_allocated=msg.get("cuda_allocated_bytes"))
+                self._note(
+                    "job_cancelled",
+                    clean=msg.get("type") == "cancelled",
+                    frames_done=msg.get("frames_done"),
+                    worker_seconds=msg.get("seconds"),
+                    cuda_allocated=msg.get("cuda_allocated_bytes"),
+                )
                 if msg.get("type") == "error" and msg.get("fatal"):
                     self._discard("fatal error during cancel", error=True)
                 else:
