@@ -36,7 +36,7 @@ The node pack itself has no Python dependencies beyond ComfyUI and never downloa
 1. Build the runtime and download the weights inside the dedicated distro, as described in
    [docs/SETUP.md](docs/SETUP.md) (upstream `deploy/DEPLOYMENT.md`, RTX 5090 section). Check the weight files against
    the Hugging Face SHA-256 digests of the pinned revisions.
-2. Install this node pack into `ComfyUI/custom_nodes` (ComfyUI Manager or `git clone`).
+2. Install this node pack into `ComfyUI/custom_nodes` with `git clone`.
 3. Copy [examples/joyai.runtimes.example.json](examples/joyai.runtimes.example.json) to
    `<ComfyUI user directory>/joyai.runtimes.json` (or set `COMFYUI_JOYAI_CONFIG`) and fill in the distro name and paths.
    Workflows can only pick a runtime id from this file.
